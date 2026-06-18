@@ -11,8 +11,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from sparc.nodes import (
+    BernoulliInputNode,
     CategoricalInputNode,
     CircuitNode,
+    DiscreteLogisticInputNode,
+    IndicatorInputNode,
+    LiteralInputNode,
     ProductNode,
     SumNode,
 )
@@ -37,6 +41,14 @@ def _iter_children(node: CircuitNode) -> List[CircuitNode]:
 def _node_kind(node: CircuitNode) -> str:
     if isinstance(node, CategoricalInputNode):
         return "categorical"
+    if isinstance(node, BernoulliInputNode):
+        return "bernoulli"
+    if isinstance(node, LiteralInputNode):
+        return "literal"
+    if isinstance(node, IndicatorInputNode):
+        return "indicator"
+    if isinstance(node, DiscreteLogisticInputNode):
+        return "discrete_logistic"
     if isinstance(node, SumNode):
         return "sum"
     if isinstance(node, ProductNode):
@@ -72,6 +84,21 @@ def _build_record(node: CircuitNode, node_id: int, pyid_to_idx: Dict[int, int]) 
     elif kind == "categorical":
         rec["scope"] = node.scope_as_list()
         rec["params"] = list(node.probabilities_list())
+    elif kind == "bernoulli":
+        rec["scope"] = node.scope_as_list()
+        rec["p"] = float(node.p())
+    elif kind == "literal":
+        rec["scope"] = node.scope_as_list()
+        rec["value"] = int(node.value_at())
+    elif kind == "indicator":
+        rec["scope"] = node.scope_as_list()
+        rec["value"] = int(node.value_at())
+        rec["num_cats"] = int(node.num_categories())
+    elif kind == "discrete_logistic":
+        rec["scope"] = node.scope_as_list()
+        rec["mu"] = float(node.mu_value())
+        rec["s"] = float(node.s_value())
+        rec["num_cats"] = int(node.num_categories())
     return rec
 
 
@@ -155,6 +182,28 @@ class CircuitSerializer:
             elif kind == "categorical":
                 scope = [int(x) for x in rec["scope"]]
                 built[nid] = _instantiate(kind, node_id=nid, children=children_objs, scope=scope, params=rec["params"])
+            elif kind == "bernoulli":
+                scope = [int(x) for x in rec["scope"]]
+                if len(scope) != 1:
+                    raise ValueError(f"bernoulli leaf requires a single-variable scope; got {scope!r}")
+                built[nid] = BernoulliInputNode(nid, scope[0], float(rec["p"]))
+            elif kind == "literal":
+                scope = [int(x) for x in rec["scope"]]
+                if len(scope) != 1:
+                    raise ValueError(f"literal leaf requires a single-variable scope; got {scope!r}")
+                built[nid] = LiteralInputNode(nid, scope[0], int(rec["value"]))
+            elif kind == "indicator":
+                scope = [int(x) for x in rec["scope"]]
+                if len(scope) != 1:
+                    raise ValueError(f"indicator leaf requires a single-variable scope; got {scope!r}")
+                built[nid] = IndicatorInputNode(nid, scope[0], int(rec["value"]), int(rec["num_cats"]))
+            elif kind == "discrete_logistic":
+                scope = [int(x) for x in rec["scope"]]
+                if len(scope) != 1:
+                    raise ValueError(f"discrete_logistic leaf requires a single-variable scope; got {scope!r}")
+                built[nid] = DiscreteLogisticInputNode(
+                    nid, scope[0], float(rec["mu"]), float(rec["s"]), int(rec["num_cats"])
+                )
             else:
                 raise ValueError(f"Unknown kind {kind!r}")
 

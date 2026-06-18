@@ -76,3 +76,31 @@ cdef class CategoricalInputNode(FiniteDiscreteInputNode):
 
     cpdef list probabilities_list(self)
     cpdef void set_probabilities_list(self, object probabilities) except *
+
+cdef class BernoulliInputNode(FiniteDiscreteInputNode):
+    cdef vector[double] probabilities
+
+    cpdef double p(self)
+    cpdef list probabilities_list(self)
+    cpdef void set_probabilities_list(self, object probabilities) except *
+
+cdef class IndicatorInputNode(FiniteDiscreteInputNode):
+    cdef int value
+    cdef size_t num_cats
+
+    cpdef int value_at(self)
+    cpdef Py_ssize_t num_categories(self)
+
+cdef class LiteralInputNode(FiniteDiscreteInputNode):
+    cdef int value
+
+    cpdef int value_at(self)
+
+cdef class DiscreteLogisticInputNode(FiniteDiscreteInputNode):
+    cdef double mu
+    cdef double s
+    cdef size_t num_cats
+
+    cpdef double mu_value(self)
+    cpdef double s_value(self)
+    cpdef Py_ssize_t num_categories(self)

@@ -6,11 +6,15 @@ from sparc.grad import GradBundle, mean_log_likelihood_and_grad
 from sparc.io import CircuitSerializer, load_learned_pc
 from sparc.metrics import GroundMetric, PNormMetric
 from sparc.nodes import (
+    BernoulliInputNode,
     CategoricalInputNode,
     CircuitNode,
+    DiscreteLogisticInputNode,
     Evidence,
     FiniteDiscreteInputNode,
+    IndicatorInputNode,
     InputNode,
+    LiteralInputNode,
     ProductNode,
     RandomState,
     SumNode,
@@ -39,6 +43,10 @@ __all__ = [
     "InputNode",
     "FiniteDiscreteInputNode",
     "CategoricalInputNode",
+    "BernoulliInputNode",
+    "IndicatorInputNode",
+    "LiteralInputNode",
+    "DiscreteLogisticInputNode",
     "Evidence",
     "RandomState",
     "likelihood",

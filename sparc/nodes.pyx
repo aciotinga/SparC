@@ -18,9 +18,17 @@ from libcpp.random cimport mt19937_64, uniform_real_distribution
 from libcpp.unordered_set cimport unordered_set
 from libcpp.utility cimport pair
 from libcpp.vector cimport vector
-from libc.math cimport fabs, isfinite
+from libc.math cimport exp, fabs, isfinite
 
 cdef double PROB_TOL = 1e-6
+
+
+cdef inline double _sigmoid(double x) noexcept:
+    cdef double z
+    if x >= 0.0:
+        return 1.0 / (1.0 + exp(-x))
+    z = exp(x)
+    return z / (1.0 + z)
 
 
 cdef void validate_non_negative_scope(unordered_set[int]& scope):
@@ -370,3 +378,178 @@ cdef class CategoricalInputNode(FiniteDiscreteInputNode):
         if self.probabilities.size() < 2:
             raise ValueError("categorical distribution must have at least 2 outcomes")
         validate_probabilities(self.probabilities, True)
+
+
+cdef class BernoulliInputNode(FiniteDiscreteInputNode):
+    """Binary leaf with success probability ``p`` (support ``{0, 1}``).
+
+    Internally stored as a 2-outcome PMF ``[1 - p, p]`` so it reuses the same
+    simplex-projected gradient path as the categorical leaf.
+    """
+
+    def __init__(self, size_t id, int scope_var, double p):
+        if scope_var < 0:
+            raise ValueError(f"scope_var must be non-negative, got {scope_var}")
+        if not isfinite(p) or p < 0.0 or p > 1.0:
+            raise ValueError(f"bernoulli p must lie in [0, 1], got {p}")
+        CircuitNode.__init__(self, id)
+        self.node_kind = NODE_INPUT
+        self.scope.clear()
+        self.scope.insert(scope_var)
+        self.probabilities.clear()
+        self.probabilities.push_back(1.0 - p)
+        self.probabilities.push_back(p)
+
+    cdef inline size_t support_size(self) noexcept:
+        return 2
+
+    cdef double pmf_at(self, size_t index) except *:
+        if index >= self.probabilities.size():
+            raise IndexError(
+                f"outcome index {index} out of range for node {self.id}"
+            )
+        return self.probabilities[index]
+
+    cpdef double p(self):
+        return self.probabilities[1]
+
+    cpdef list probabilities_list(self):
+        return [self.probabilities[0], self.probabilities[1]]
+
+    cpdef void set_probabilities_list(self, object probabilities) except *:
+        cdef list vals = list(probabilities)
+        if len(vals) != 2:
+            raise ValueError("bernoulli distribution requires exactly 2 outcomes")
+        fill_vector_double(self.probabilities, vals)
+        validate_probabilities(self.probabilities, True)
+
+
+cdef class IndicatorInputNode(FiniteDiscreteInputNode):
+    """Deterministic leaf placing all mass on a single outcome ``value``.
+
+    Useful as a clamped/observed leaf over a variable with ``num_cats`` states.
+    Carries no trainable parameters.
+    """
+
+    def __init__(self, size_t id, int scope_var, int value, object num_cats):
+        cdef Py_ssize_t k = int(num_cats)
+        if scope_var < 0:
+            raise ValueError(f"scope_var must be non-negative, got {scope_var}")
+        if k < 2:
+            raise ValueError("indicator distribution must have at least 2 outcomes")
+        if value < 0 or value >= k:
+            raise ValueError(
+                f"indicator value {value} out of range [0, {k})"
+            )
+        CircuitNode.__init__(self, id)
+        self.node_kind = NODE_INPUT
+        self.scope.clear()
+        self.scope.insert(scope_var)
+        self.value = value
+        self.num_cats = <size_t>k
+
+    cdef inline size_t support_size(self) noexcept:
+        return self.num_cats
+
+    cdef double pmf_at(self, size_t index) except *:
+        if index >= self.num_cats:
+            raise IndexError(
+                f"outcome index {index} out of range for node {self.id}"
+            )
+        if <int>index == self.value:
+            return 1.0
+        return 0.0
+
+    cpdef int value_at(self):
+        return self.value
+
+    cpdef Py_ssize_t num_categories(self):
+        return <Py_ssize_t>self.num_cats
+
+
+cdef class LiteralInputNode(FiniteDiscreteInputNode):
+    """Deterministic boolean leaf (support ``{0, 1}``) clamped to ``value``."""
+
+    def __init__(self, size_t id, int scope_var, object value):
+        cdef int v = 1 if value else 0
+        if scope_var < 0:
+            raise ValueError(f"scope_var must be non-negative, got {scope_var}")
+        CircuitNode.__init__(self, id)
+        self.node_kind = NODE_INPUT
+        self.scope.clear()
+        self.scope.insert(scope_var)
+        self.value = v
+
+    cdef inline size_t support_size(self) noexcept:
+        return 2
+
+    cdef double pmf_at(self, size_t index) except *:
+        if index >= 2:
+            raise IndexError(
+                f"outcome index {index} out of range for node {self.id}"
+            )
+        if <int>index == self.value:
+            return 1.0
+        return 0.0
+
+    cpdef int value_at(self):
+        return self.value
+
+
+cdef class DiscreteLogisticInputNode(FiniteDiscreteInputNode):
+    """Logistic distribution discretized over integer bins ``0 .. num_cats-1``.
+
+    The PMF of bin ``k`` is the logistic CDF mass over ``[k - 0.5, k + 0.5)``
+    with the two boundary bins absorbing the lower and upper tails, so the bins
+    always sum to exactly one. Parameters are the location ``mu`` and scale
+    ``s``; they describe a continuous shape sampled onto a finite grid and are
+    treated as fixed by the simplex optimizer (the leaf remains fully usable for
+    likelihood, sampling, and all transport / expectation queries).
+    """
+
+    def __init__(self, size_t id, int scope_var, double mu, double s, object num_cats):
+        cdef Py_ssize_t k = int(num_cats)
+        if scope_var < 0:
+            raise ValueError(f"scope_var must be non-negative, got {scope_var}")
+        if k < 2:
+            raise ValueError("discrete logistic must have at least 2 outcomes")
+        if not isfinite(mu):
+            raise ValueError("discrete logistic mu must be finite")
+        if not isfinite(s) or s <= 0.0:
+            raise ValueError(f"discrete logistic s must be positive, got {s}")
+        CircuitNode.__init__(self, id)
+        self.node_kind = NODE_INPUT
+        self.scope.clear()
+        self.scope.insert(scope_var)
+        self.mu = mu
+        self.s = s
+        self.num_cats = <size_t>k
+
+    cdef inline size_t support_size(self) noexcept:
+        return self.num_cats
+
+    cdef double pmf_at(self, size_t index) except *:
+        cdef double lo
+        cdef double hi
+        if index >= self.num_cats:
+            raise IndexError(
+                f"outcome index {index} out of range for node {self.id}"
+            )
+        if index == 0:
+            hi = (0.5 - self.mu) / self.s
+            return _sigmoid(hi)
+        if index == self.num_cats - 1:
+            lo = (<double>index - 0.5 - self.mu) / self.s
+            return 1.0 - _sigmoid(lo)
+        lo = (<double>index - 0.5 - self.mu) / self.s
+        hi = (<double>index + 0.5 - self.mu) / self.s
+        return _sigmoid(hi) - _sigmoid(lo)
+
+    cpdef double mu_value(self):
+        return self.mu
+
+    cpdef double s_value(self):
+        return self.s
+
+    cpdef Py_ssize_t num_categories(self):
+        return <Py_ssize_t>self.num_cats

@@ -6,7 +6,15 @@ from typing import Iterable, List, Sequence, Union
 
 import numpy as np
 
-from sparc.nodes import CategoricalInputNode, ProductNode, SumNode
+from sparc.nodes import (
+    BernoulliInputNode,
+    CategoricalInputNode,
+    DiscreteLogisticInputNode,
+    IndicatorInputNode,
+    LiteralInputNode,
+    ProductNode,
+    SumNode,
+)
 
 _ArrayLike = Union[Sequence[float], np.ndarray]
 
@@ -29,6 +37,24 @@ class _NodeFactory:
     def categorical(self, scope_var: int, probabilities: _ArrayLike) -> CategoricalInputNode:
         return CategoricalInputNode(
             self._alloc_id(), int(scope_var), _as_float_list(probabilities)
+        )
+
+    def bernoulli(self, scope_var: int, p: float) -> BernoulliInputNode:
+        return BernoulliInputNode(self._alloc_id(), int(scope_var), float(p))
+
+    def indicator(self, scope_var: int, value: int, num_cats: int) -> IndicatorInputNode:
+        return IndicatorInputNode(
+            self._alloc_id(), int(scope_var), int(value), int(num_cats)
+        )
+
+    def literal(self, scope_var: int, value: int) -> LiteralInputNode:
+        return LiteralInputNode(self._alloc_id(), int(scope_var), int(value))
+
+    def discrete_logistic(
+        self, scope_var: int, mu: float, s: float, num_cats: int
+    ) -> DiscreteLogisticInputNode:
+        return DiscreteLogisticInputNode(
+            self._alloc_id(), int(scope_var), float(mu), float(s), int(num_cats)
         )
 
     def product(self, children: Iterable) -> ProductNode:

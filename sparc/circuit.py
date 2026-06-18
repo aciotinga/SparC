@@ -4,8 +4,12 @@ from pathlib import Path
 from typing import Optional, Union
 
 from sparc.nodes import (
+    BernoulliInputNode,
     CategoricalInputNode,
     CircuitNode,
+    DiscreteLogisticInputNode,
+    IndicatorInputNode,
+    LiteralInputNode,
     ProductNode,
     SumNode,
 )
@@ -19,6 +23,22 @@ def _clone_node(node, memo):
     if isinstance(node, CategoricalInputNode):
         new = CategoricalInputNode(
             node.id, node.scope_as_list()[0], node.probabilities_list()
+        )
+    elif isinstance(node, BernoulliInputNode):
+        new = BernoulliInputNode(node.id, node.scope_as_list()[0], node.p())
+    elif isinstance(node, LiteralInputNode):
+        new = LiteralInputNode(node.id, node.scope_as_list()[0], node.value_at())
+    elif isinstance(node, IndicatorInputNode):
+        new = IndicatorInputNode(
+            node.id, node.scope_as_list()[0], node.value_at(), node.num_categories()
+        )
+    elif isinstance(node, DiscreteLogisticInputNode):
+        new = DiscreteLogisticInputNode(
+            node.id,
+            node.scope_as_list()[0],
+            node.mu_value(),
+            node.s_value(),
+            node.num_categories(),
         )
     elif isinstance(node, SumNode):
         children = [_clone_node(c, memo) for c in node.children()]

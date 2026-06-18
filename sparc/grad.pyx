@@ -15,6 +15,7 @@ import numpy as np
 
 from sparc._mathutils cimport sp_logsumexp, sp_safe_log
 from sparc.nodes cimport (
+    BernoulliInputNode,
     CategoricalInputNode,
     CircuitNode,
     Evidence,
@@ -136,20 +137,24 @@ cdef class _LLGradContext:
                 self._backward_sum(<SumNode>node, bar)
 
     cdef void _backward_leaf(self, InputNode node, double bar) except *:
-        cdef CategoricalInputNode cat
+        cdef FiniteDiscreteInputNode leaf
         cdef int var
         cdef int value
         cdef double p_v
         cdef object arr
-        if not isinstance(node, CategoricalInputNode):
+        # Only leaves whose parameters live on a probability simplex are
+        # trainable through this path (categorical and bernoulli). Deterministic
+        # or shape-parameterized leaves contribute no parameter gradient.
+        if not (isinstance(node, CategoricalInputNode)
+                or isinstance(node, BernoulliInputNode)):
             return
-        cat = <CategoricalInputNode>node
-        var = cat.scope_var_c()
+        leaf = <FiniteDiscreteInputNode>node
+        var = leaf.scope_var_c()
         value = self.evidence.get(var)
-        p_v = cat.pmf_at(<size_t>value)
+        p_v = leaf.pmf_at(<size_t>value)
         if p_v <= 0.0:
             return
-        arr = grad_arr(self.cat_grads, cat.id, cat.support_size())
+        arr = grad_arr(self.cat_grads, leaf.id, leaf.support_size())
         arr[value] += bar / p_v
 
     cdef void _backward_prod(self, ProductNode node, double bar) except *:

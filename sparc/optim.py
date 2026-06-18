@@ -12,7 +12,13 @@ from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Union
 import numpy as np
 
 from sparc.circuit import Circuit
-from sparc.nodes import CategoricalInputNode, CircuitNode, ProductNode, SumNode
+from sparc.nodes import (
+    BernoulliInputNode,
+    CategoricalInputNode,
+    CircuitNode,
+    ProductNode,
+    SumNode,
+)
 
 PROB_FLOOR = 1e-20
 
@@ -112,7 +118,10 @@ def apply_grads(
                     ascent=ascent, method=method, prob_floor=prob_floor,
                 )
             )
-        elif isinstance(node, CategoricalInputNode) and nid in cat_grads:
+        elif (
+            isinstance(node, (CategoricalInputNode, BernoulliInputNode))
+            and nid in cat_grads
+        ):
             node.set_probabilities_list(
                 simplex_step(
                     node.probabilities_list(), cat_grads[nid], lr,
