@@ -4,8 +4,7 @@ Each test compares the analytic subgradient returned by
 ``gcw_crossterm_and_grad`` to a symmetric finite-difference reference. To avoid
 non-smooth points of the underlying piecewise-linear/quadratic structure
 (LP degeneracy at sum-sum nodes, Hungarian ties, NW mass coincidences) the
-fixtures use random non-symmetric weights and probability vectors. Runs against
-SparC's built-in solvers (no Gurobi).
+fixtures use random non-symmetric weights and probability vectors.
 """
 
 import numpy as np

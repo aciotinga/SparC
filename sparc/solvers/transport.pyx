@@ -4,9 +4,9 @@
 
 Solves ``min <cost, x>`` s.t. row sums == supply, col sums == demand, x >= 0,
 returning the optimal plan and the dual potentials ``(u, v)`` with
-``u_i + v_j == cost_ij`` on the optimal basis. The duals are exactly the
-shadow prices ``d(obj)/d(supply_i)`` and ``d(obj)/d(demand_j)``, i.e. the
-quantities Gurobi returned as ``constr.Pi`` in the original implementation.
+``u_i + v_j == cost_ij`` on the optimal basis. The duals are the shadow prices
+``d(obj)/d(supply_i)`` and ``d(obj)/d(demand_j)`` used by the sum×sum
+subgradient in CW/GCW queries.
 
 The right-hand side is perturbed by tiny distinct amounts to guarantee a
 non-degenerate basic feasible solution (so the simplex strictly improves each

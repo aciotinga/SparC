@@ -1,12 +1,12 @@
 # distutils: language = c++
 # distutils: extra_compile_args = -std=c++17 -O3
-"""Pluggable ground metrics for the optimal-transport queries.
+"""Pluggable ground metrics for Wasserstein (CW/GCW) queries.
 
 A ground metric defines the cost of moving mass between two outcome indices of
 a finite-discrete leaf. Custom metrics subclass :class:`GroundMetric` and fill
 the ``pairwise`` (n x n, same support) and ``cross`` (n x m, two supports)
-cost matrices. The default :class:`PNormMetric` reproduces the original
-``|i - j|**p / scale`` ground cost on the integer line.
+cost matrices. The default :class:`PNormMetric` uses ``|i - j|**p / scale``
+on the integer line.
 """
 
 from libcpp.vector cimport vector

@@ -1,10 +1,8 @@
 """Optimization utilities for circuit parameters living on probability simplices.
 
 Both sum-node weights and categorical PMFs are constrained to the simplex, so a
-plain gradient step has to be projected back. This module consolidates the
-three projection patterns that were copy-pasted across the old experiment
-scripts into one :func:`simplex_step`, plus an :func:`apply_grads` walker and a
-small :class:`MLETrainer` over the batched gradient path.
+plain gradient step has to be projected back. This module provides
+:func:`simplex_step`, :func:`apply_grads`, and :class:`MLETrainer`.
 """
 
 from __future__ import annotations

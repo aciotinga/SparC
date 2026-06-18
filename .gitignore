@@ -30,7 +30,6 @@ ENV/
 .pytest_cache/
 .mypy_cache/
 .vscode/
-optimal-transport/
 .ruff_cache/
 .coverage
 .coverage.*

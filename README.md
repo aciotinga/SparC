@@ -1,9 +1,7 @@
 # SparC
 
 **Spar**se **C**ircuits — a fast, modular, CPU-only library for probabilistic
-circuits (PCs) written in Cython. SparC is a clean-room rewrite of the
-research-only `fastcircuits` code, keeping what worked (typed Cython, gradient
-tapes, OT-based circuit distances) and dropping the technical debt.
+circuits (PCs) written in Cython.
 
 ## Highlights
 
@@ -12,9 +10,9 @@ tapes, OT-based circuit distances) and dropping the technical debt.
 - **Modularity**: nodes dispatch through a C-level vtable, and all pairwise
   queries share one tape/gradient engine. New leaf types and new queries are
   added without editing existing files.
-- **Minimal deps**: `numpy` only at runtime. The optimal-transport and
-  assignment problems are solved by built-in pure-Cython solvers — no SciPy,
-  no Gurobi. `gurobipy` is an optional extra for solver cross-checks.
+- **Minimal deps**: `numpy` only at runtime. Transportation and assignment
+  problems are solved by built-in pure-Cython solvers. Optional `gurobipy`
+  extra for cross-checking transport duals.
 
 ## Install
 

@@ -1,7 +1,6 @@
-"""Tests for the GCW cross-term query (``sparc.gcw_crossterm``).
+"""Tests for the GCW cross-term query (``gcw_crossterm``).
 
-Runs against SparC's built-in solvers (no Gurobi / SciPy). The leaf brute-force
-check validates the built-in NW coupling.
+The leaf brute-force check validates the built-in NW coupling.
 """
 
 import numpy as np

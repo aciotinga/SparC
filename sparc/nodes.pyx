@@ -5,7 +5,7 @@
 The node layer is built for *extensibility through C-level virtual dispatch*:
 ``InputNode`` exposes a tiny ``cdef`` vtable (``prob_c`` / ``sample_into_c``) and
 ``FiniteDiscreteInputNode`` extends it with the discrete-support interface that
-the optimal-transport / expectation queries need (``support_size`` / ``pmf_at`` /
+Wasserstein and expectation queries need (``support_size`` / ``pmf_at`` /
 ``scope_var_c``). A new leaf distribution is added by subclassing one of those
 and overriding a couple of ``cdef`` methods -- no query, eval, or builder code
 needs to change.
@@ -288,8 +288,8 @@ cdef class InputNode(CircuitNode):
 cdef class FiniteDiscreteInputNode(InputNode):
     """Leaf with finite discrete support over a single variable.
 
-    This is the interface required by the optimal-transport (GCW / CW) and
-    expectation queries: they only need the PMF and the scope variable.
+    This is the interface required by Wasserstein (GCW / CW) and expectation
+    queries: they only need the PMF and the scope variable.
     """
 
     cdef size_t support_size(self) noexcept:

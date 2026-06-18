@@ -2,9 +2,9 @@
 # distutils: extra_compile_args = -std=c++17 -O3
 """Rectangular linear-sum assignment (Kuhn-Munkres / Hungarian), O(k^3).
 
-Matches the smaller side fully and minimizes total cost -- the same semantics
-as ``scipy.optimize.linear_sum_assignment``. The GCW product-vs-product handler
-negates its score matrix to turn the max-weight matching into a min-cost one.
+Matches the smaller side fully and minimizes total cost. The GCW
+product-vs-product handler negates its score matrix to turn the max-weight
+matching into a min-cost one.
 """
 
 from libcpp.vector cimport vector

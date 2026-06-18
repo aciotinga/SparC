@@ -1,6 +1,6 @@
-"""SparC-specific tests added in the rewrite: log_exp parity, batched-vs-dict
-eval, Circuit.clone independence, simplex_step projections, MLE ascent, and a
-DRO loop smoke test (all on the built-in solvers)."""
+"""Integration tests: log_exp parity, batched-vs-dict eval, clone independence,
+simplex_step projections, MLE ascent, and a DRO loop smoke test.
+"""
 
 import math
 import random

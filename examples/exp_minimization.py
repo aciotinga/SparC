@@ -5,10 +5,6 @@ expectation is positive) and is numerically better behaved. Each step applies
 projected simplex *descent* to every parameter of ``circuit2`` (Q).
 
     python examples/exp_minimization.py
-
-NOTE: the original `exp_maximization.py` recipe was internally inconsistent --
-named "maximization" but doing ascent while documenting descent. Here the
-direction is explicit via ``ascent=`` and the file name matches the objective.
 """
 
 import random

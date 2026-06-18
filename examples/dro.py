@@ -4,8 +4,7 @@ Solves   max_theta  min_{Q : CW(P_hat, Q) <= k}  log E_Q[P_theta]
 via a Lagrangian inner loop on Q (and a dual variable lambda for the CW-ball
 constraint) and projected gradient ascent on the outer player theta.
 
-This is a self-contained recipe on synthetic circuits using only the built-in
-solvers (no Gurobi, no file IO, no plotting).
+This is a self-contained recipe on synthetic circuits.
 
     python examples/dro.py
 """

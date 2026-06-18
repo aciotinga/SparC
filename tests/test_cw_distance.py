@@ -1,8 +1,7 @@
 """Tests for Circuit-Wasserstein distance (``cw_distance`` / ``cw_distance_and_grad``).
 
-These run against SparC's built-in transportation / assignment solvers (no
-Gurobi, no SciPy). The brute-force NW-corner references double as a
-built-in-solver-vs-oracle check on leaf couplings.
+Brute-force NW-corner references on leaf couplings validate the built-in
+transport solver.
 """
 
 import numpy as np

@@ -2,17 +2,16 @@
 # distutils: extra_compile_args = -std=c++17 -O3
 """Shared machinery for pairwise (two-circuit) coupling queries.
 
-This eliminates the ~80% copy-paste that used to be duplicated across the GCW /
-CW / expectation modules: the pair-keyed memo, the gradient tape (append /
-lookup / reverse replay), the per-side gradient arrays, and the structured
-product-child scope matching all live here once. Each query subclasses
+Provides the pair-keyed memo, gradient tape (append / lookup / reverse replay),
+per-side gradient arrays, and structured product-child scope matching used by
+the GCW, CW, and expectation queries. Each query subclasses
 :class:`CoupleContext`, supplies its ``couple_value`` recursion and a handful of
 :class:`TapeEntry` subclasses with their own ``backward`` math.
 
-Two keying schemes are used deliberately, matching the original implementation:
-the coupling memo / tape are keyed by Python object identity (unique across the
-two circuits), while the returned gradient bundles are keyed by ``node.id`` so
-callers can match gradients to nodes.
+Two keying schemes are used deliberately: the coupling memo / tape are keyed by
+Python object identity (unique across the two circuits), while the returned
+gradient bundles are keyed by ``node.id`` so callers can match gradients to
+nodes.
 """
 
 from cython.operator cimport dereference as deref

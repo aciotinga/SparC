@@ -1,7 +1,7 @@
 """Plaintext (JSON) serialization for a single-root circuit graph.
 
-Shared children (DAGs) are deduplicated by object identity. The on-disk
-``gcw-circuit-v1`` format is preserved for interop with older tooling.
+Shared children (DAGs) are deduplicated by object identity. On disk, circuits
+use the ``gcw-circuit-v1`` JSON format.
 """
 
 from __future__ import annotations
