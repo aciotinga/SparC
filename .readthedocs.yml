@@ -6,6 +6,13 @@ build:
     python: "3.10"
   apt_packages:
     - g++
+  jobs:
+    post_install:
+      # Reinstall editable so Cython extensions are importable from the checkout
+      # (plain `pip install .` can leave extension submodules unavailable to
+      # mkdocstrings on RTD).
+      - pip install --no-build-isolation -e ".[docs]"
+      - python -c "import sparc.eval; import sparc.nodes; import sparc.queries.cw"
 
 python:
   install:

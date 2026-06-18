@@ -1,6 +1,6 @@
 site_name: SparC
 site_url: https://sparc-docs.readthedocs.io
-repo_url: https://github.com/adrianciotinga/sparc
+repo_url: https://github.com/aciotinga/sparc
 edit_uri: blob/main
 nav:
   - Getting Started: "index.md"
@@ -34,6 +34,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
+          paths: ["."]
           inventories:
             - https://docs.python.org/3/objects.inv
             - https://numpy.org/doc/stable/objects.inv

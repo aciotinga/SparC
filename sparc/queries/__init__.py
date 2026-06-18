@@ -17,22 +17,9 @@ decompositions). CW and GCW gradient variants return gradients w.r.t.
 **circuit2** only; expectation queries return gradients for both circuits.
 """
 
-from sparc.queries.cw import cw_distance, cw_distance_and_grad
-from sparc.queries.esd import (
-    expected_squared_distance,
-    expected_squared_distance_and_grad,
-)
-from sparc.queries.expectation import (
-    exp_query,
-    exp_query_and_grad,
-    log_exp_query,
-    log_exp_query_and_grad,
-)
-from sparc.queries.gcw import (
-    gcw_coupling_circuit,
-    gcw_crossterm,
-    gcw_crossterm_and_grad,
-)
+from __future__ import annotations
+
+import importlib
 
 __all__ = [
     "cw_distance",
@@ -47,3 +34,38 @@ __all__ = [
     "gcw_crossterm_and_grad",
     "gcw_coupling_circuit",
 ]
+
+_LAZY_EXPORTS = {
+    "cw_distance": ("sparc.queries.cw", "cw_distance"),
+    "cw_distance_and_grad": ("sparc.queries.cw", "cw_distance_and_grad"),
+    "expected_squared_distance": ("sparc.queries.esd", "expected_squared_distance"),
+    "expected_squared_distance_and_grad": (
+        "sparc.queries.esd",
+        "expected_squared_distance_and_grad",
+    ),
+    "exp_query": ("sparc.queries.expectation", "exp_query"),
+    "exp_query_and_grad": ("sparc.queries.expectation", "exp_query_and_grad"),
+    "log_exp_query": ("sparc.queries.expectation", "log_exp_query"),
+    "log_exp_query_and_grad": (
+        "sparc.queries.expectation",
+        "log_exp_query_and_grad",
+    ),
+    "gcw_crossterm": ("sparc.queries.gcw", "gcw_crossterm"),
+    "gcw_crossterm_and_grad": ("sparc.queries.gcw", "gcw_crossterm_and_grad"),
+    "gcw_coupling_circuit": ("sparc.queries.gcw", "gcw_coupling_circuit"),
+}
+
+
+def __getattr__(name: str):
+    spec = _LAZY_EXPORTS.get(name)
+    if spec is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr_name = spec
+    module = importlib.import_module(module_name)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))

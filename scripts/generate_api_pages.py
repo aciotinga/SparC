@@ -3,6 +3,7 @@
 
 """Generate the code API documentation pages and navigation."""
 
+import importlib
 from pathlib import Path
 
 import mkdocs_gen_files
@@ -45,6 +46,10 @@ def _is_private_module(ident: str) -> bool:
 
 def _add_module(ident: str, doc_path: Path) -> None:
     if ident in seen or ident in SKIP_MODULES or _is_private_module(ident):
+        return
+    try:
+        importlib.import_module(ident)
+    except ImportError:
         return
     seen.add(ident)
     parts = tuple(ident.split("."))
