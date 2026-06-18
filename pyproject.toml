@@ -9,7 +9,7 @@ description = "SparC: fast, modular sparse probabilistic circuits in Cython (CPU
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
-authors = [{ name = "SparC contributors" }]
+authors = [{ name = "Adrian Ciotinga" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
