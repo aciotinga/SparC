@@ -22,7 +22,7 @@ def make_circuit(seed):
     np.random.seed(seed)
     random.seed(seed)
     return EmbeddingBuilder(
-        num_vars=50, num_categories=3, sum_arity=2, prod_arity=2,
+        num_vars=10, num_categories=3, sum_arity=2, prod_arity=2,
         sum_concentration=1.0, sum_reuse_probability=0.0,
         prod_reuse_probability=0.0, input_distribution="categorical", alpha=1.0,
     ).build()

@@ -14,6 +14,7 @@ else:
 # C++ <random>, etc.).
 _pyx_modules = [
     "sparc.nodes",
+    "sparc._graph",
     "sparc.eval",
     "sparc.grad",
     "sparc.metrics",

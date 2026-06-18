@@ -14,8 +14,10 @@ gradient bundles are keyed by ``node.id`` so callers can match gradients to
 nodes.
 """
 
-from cython.operator cimport dereference as deref
+from cython.operator cimport dereference as deref, preincrement as inc
+from libc.stdint cimport uint64_t
 from libcpp.unordered_map cimport unordered_map
+from libcpp.unordered_set cimport unordered_set
 from libcpp.vector cimport vector
 
 import numpy as np
@@ -23,19 +25,6 @@ import numpy as np
 from sparc.nodes cimport CircuitNode, ProductNode
 
 cdef size_t NO_TAPE_IDX = <size_t>(-1)
-
-
-cdef inline void _ordered_key(
-    CircuitNode P, CircuitNode Q, size_t* a, size_t* b
-) noexcept:
-    cdef size_t id_p = obj_id(P)
-    cdef size_t id_q = obj_id(Q)
-    if id_p <= id_q:
-        a[0] = id_p
-        b[0] = id_q
-    else:
-        a[0] = id_q
-        b[0] = id_p
 
 
 cdef class TapeEntry:
@@ -55,44 +44,28 @@ cdef class CoupleContext:
         self.cat_grads1 = {}
 
     cdef bint memo_get(self, CircuitNode P, CircuitNode Q, double* out) noexcept:
-        cdef size_t a
-        cdef size_t b
-        _ordered_key(P, Q, &a, &b)
-        cdef unordered_map[size_t, unordered_map[size_t, double]].iterator outer = self.couple_memo.find(a)
-        if outer == self.couple_memo.end():
+        cdef unordered_map[uint64_t, double].iterator it = self.couple_memo.find(
+            pair_key(P, Q))
+        if it == self.couple_memo.end():
             return False
-        cdef unordered_map[size_t, double].iterator inner = deref(outer).second.find(b)
-        if inner == deref(outer).second.end():
-            return False
-        out[0] = deref(inner).second
+        out[0] = deref(it).second
         return True
 
     cdef void memo_put(self, CircuitNode P, CircuitNode Q, double val) noexcept:
-        cdef size_t a
-        cdef size_t b
-        _ordered_key(P, Q, &a, &b)
-        self.couple_memo[a][b] = val
+        self.couple_memo[pair_key(P, Q)] = val
 
     cdef size_t lookup_pair_tape_idx(self, CircuitNode P, CircuitNode Q) noexcept:
-        cdef size_t a
-        cdef size_t b
-        _ordered_key(P, Q, &a, &b)
-        cdef unordered_map[size_t, unordered_map[size_t, size_t]].iterator outer = self.pair_to_tape.find(a)
-        if outer == self.pair_to_tape.end():
+        cdef unordered_map[uint64_t, size_t].iterator it = self.pair_to_tape.find(
+            pair_key(P, Q))
+        if it == self.pair_to_tape.end():
             return NO_TAPE_IDX
-        cdef unordered_map[size_t, size_t].iterator inner = deref(outer).second.find(b)
-        if inner == deref(outer).second.end():
-            return NO_TAPE_IDX
-        return deref(inner).second
+        return deref(it).second
 
     cdef size_t append_tape(self, TapeEntry entry, CircuitNode P, CircuitNode Q) except *:
         cdef size_t idx = <size_t>len(self.tape)
-        cdef size_t a
-        cdef size_t b
-        _ordered_key(P, Q, &a, &b)
         self.tape.append(entry)
         self.tape_adjoints.push_back(0.0)
-        self.pair_to_tape[a][b] = idx
+        self.pair_to_tape[pair_key(P, Q)] = idx
         return idx
 
     cdef object sum_grad_arr(self, int side, CircuitNode node, size_t n):
@@ -135,8 +108,34 @@ cdef class CoupleContext:
         self.cat_grads1 = {}
 
 
-cdef object _scope_frozen(CircuitNode node):
-    return frozenset(node.scope_as_list())
+cdef inline uint64_t _scope_sig(CircuitNode node) noexcept:
+    # Order-independent 64-bit signature over the node's (C-level) scope set:
+    # XOR of a bit-mixed hash per variable, plus the cardinality. Collisions are
+    # possible but rare and always resolved by an exact set comparison below, so
+    # the signature is only a fast bucket key (no frozenset allocation).
+    cdef uint64_t sig = 0
+    cdef uint64_t h
+    cdef unordered_set[int].iterator it = node.scope.begin()
+    while it != node.scope.end():
+        h = <uint64_t><unsigned int>deref(it)
+        # SplitMix64-style finalizer for good avalanche.
+        h = (h ^ (h >> 30)) * <uint64_t>0xbf58476d1ce4e5b9
+        h = (h ^ (h >> 27)) * <uint64_t>0x94d049bb133111eb
+        h = h ^ (h >> 31)
+        sig ^= h
+        inc(it)
+    return sig ^ (<uint64_t>node.scope.size() * <uint64_t>0x9e3779b97f4a7c15)
+
+
+cdef inline bint _scope_eq(CircuitNode a, CircuitNode b) noexcept:
+    if a.scope.size() != b.scope.size():
+        return False
+    cdef unordered_set[int].iterator it = a.scope.begin()
+    while it != a.scope.end():
+        if b.scope.find(deref(it)) == b.scope.end():
+            return False
+        inc(it)
+    return True
 
 
 cdef void match_prod_children(
@@ -148,7 +147,10 @@ cdef void match_prod_children(
 ) except *:
     """Match product children by scope into a bijection (structured decomp.).
 
-    Fills ``row_ind[i] = i`` and ``col_ind[i] = matched Q-child index``.
+    Fills ``row_ind[i] = i`` and ``col_ind[i] = matched Q-child index``. Matching
+    is done by an integer scope signature (computed from the C-level scope set)
+    with exact set-comparison fallback, avoiding per-call Python frozenset/dict
+    construction while preserving the original incompatibility errors.
     """
     cdef size_t n = P.num_children()
     cdef size_t m = Q.num_children()
@@ -156,10 +158,15 @@ cdef void match_prod_children(
     cdef size_t j
     cdef CircuitNode q_child
     cdef CircuitNode p_child
-    cdef object scope_to_q
-    cdef object p_key
-    cdef object q_key
-    cdef Py_ssize_t q_idx
+    cdef uint64_t sig
+    cdef int matched
+    cdef size_t remaining
+    # Per-signature buckets of (still-unmatched) Q child indices.
+    cdef unordered_map[uint64_t, vector[int]] buckets
+    cdef unordered_map[uint64_t, vector[int]].iterator bit
+    cdef vector[int]* bucket
+    cdef list q_children = []
+    cdef size_t b
 
     if n != m:
         raise ValueError(
@@ -168,29 +175,46 @@ cdef void match_prod_children(
         )
     row_ind.assign(n, 0)
     col_ind.assign(n, 0)
-    scope_to_q = {}
     for j in range(m):
         q_child = Q.child_at(j)
-        q_key = _scope_frozen(q_child)
-        if q_key in scope_to_q:
-            raise ValueError(
-                f"{query_name} incompatible: duplicate child scope among Q "
-                "product children"
-            )
-        scope_to_q[q_key] = j
+        q_children.append(q_child)
+        sig = _scope_sig(q_child)
+        # Reject duplicate Q scopes (same error as before): a signature match
+        # plus an exact scope match means a true duplicate.
+        bit = buckets.find(sig)
+        if bit != buckets.end():
+            bucket = &deref(bit).second
+            for b in range(bucket.size()):
+                if _scope_eq(<CircuitNode>q_children[deref(bucket)[b]], q_child):
+                    raise ValueError(
+                        f"{query_name} incompatible: duplicate child scope among "
+                        "Q product children"
+                    )
+        buckets[sig].push_back(<int>j)
+    remaining = m
     for i in range(n):
         p_child = P.child_at(i)
-        p_key = _scope_frozen(p_child)
-        if p_key not in scope_to_q:
+        sig = _scope_sig(p_child)
+        matched = -1
+        bit = buckets.find(sig)
+        if bit != buckets.end():
+            bucket = &deref(bit).second
+            for b in range(bucket.size()):
+                if deref(bucket)[b] >= 0 and _scope_eq(
+                    <CircuitNode>q_children[deref(bucket)[b]], p_child
+                ):
+                    matched = deref(bucket)[b]
+                    deref(bucket)[b] = -1  # consume this Q child
+                    break
+        if matched < 0:
             raise ValueError(
                 f"{query_name} incompatible: no Q product child with scope "
                 f"matching P child at index {i}"
             )
-        q_idx = scope_to_q[p_key]
-        del scope_to_q[p_key]
         row_ind[i] = <int>i
-        col_ind[i] = <int>q_idx
-    if len(scope_to_q) > 0:
+        col_ind[i] = matched
+        remaining -= 1
+    if remaining != 0:
         raise ValueError(
             f"{query_name} incompatible: Q product children with unmatched scopes"
         )

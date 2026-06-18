@@ -24,8 +24,8 @@ from sparc.queries import (
 
 K = 2.0            # Wasserstein-ball radius
 NUM_Q_ITERS = 5    # inner phi/lambda iterations per outer step
-ETA_THETA = 1e-1
-ETA_PHI = 1e-1
+ETA_THETA = 1e-2
+ETA_PHI = 1e-2
 ETA_LAMBDA = 10.0
 LAMBDA_MAX = 1000.0
 
@@ -60,6 +60,30 @@ def update_q(p_theta, q_phi, p_hat, lam):
     return lam
 
 
+def run_dro(p_hat, *, k=K, num_iters=20, eta_theta=ETA_THETA, verbose=True):
+    """Run DRO on ``p_hat``; return robustified ``(p_theta, q_phi, lam)``."""
+    p_theta = p_hat.clone()
+    q_phi = p_hat.clone()
+    lam = 0.0
+
+    if verbose:
+        print(f"initial: log(E)={log_exp_query(p_theta, q_phi):.6f}  "
+              f"CW={cw_distance(p_hat, q_phi):.6f}")
+
+    for it in range(1, num_iters + 1):
+        lam = update_q(p_theta, q_phi, p_hat, lam)
+        _, grad_theta, _ = log_exp_query_and_grad(p_theta, q_phi)
+        apply_grads(p_theta, grad_theta, eta_theta, ascent=True)
+
+        if verbose:
+            log_e = log_exp_query(p_theta, q_phi)
+            cw = cw_distance(p_hat, q_phi)
+            print(f"  iter {it:3d}: log(E)={log_e:.6f}  CW={cw:.6f}  "
+                  f"violation={cw - k:+.6f}  lambda={lam:.3f}")
+
+    return p_theta, q_phi, lam
+
+
 def main():
     np.random.seed(0)
     random.seed(0)
@@ -67,29 +91,14 @@ def main():
     num_vars = 500
 
     rg = RandomRegionGraph(
-        frozenset(range(num_vars)), partitions_per_region=1, sub_regions_per_partition=2
+        frozenset(range(num_vars)), partitions_per_region=1, sub_regions_per_partition=3
     )
     root_region = rg.generate(frozenset(range(num_vars)))
     p_hat = RegionEmbeddingBuilder(
         root_region, num_categories=2, block_size=4,
         sum_concentration=1.0, input_distribution="categorical", alpha=1.0,
     ).build()
-    p_theta = p_hat.clone()
-    q_phi = p_hat.clone()
-    lam = 0.0
-
-    print(f"initial: log(E)={log_exp_query(p_theta, q_phi):.6f}  "
-          f"CW={cw_distance(p_hat, q_phi):.6f}")
-
-    for it in range(1, 21):
-        lam = update_q(p_theta, q_phi, p_hat, lam)
-        _, grad_theta, _ = log_exp_query_and_grad(p_theta, q_phi)
-        apply_grads(p_theta, grad_theta, ETA_THETA, ascent=True)
-
-        log_e = log_exp_query(p_theta, q_phi)
-        cw = cw_distance(p_hat, q_phi)
-        print(f"  iter {it:3d}: log(E)={log_e:.6f}  CW={cw:.6f}  "
-              f"violation={cw - K:+.6f}  lambda={lam:.3f}")
+    run_dro(p_hat)
 
 
 if __name__ == "__main__":

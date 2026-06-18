@@ -17,7 +17,7 @@ cdef void _hungarian_rect(
     size_t n,
     size_t m,
     vector[int]& row_to_col,
-) except *:
+) noexcept nogil:
     """Min-cost assignment for an n x m matrix with n <= m (1-indexed inside).
 
     Fills ``row_to_col`` (size n) with the matched column for each row.
@@ -87,7 +87,7 @@ cdef void assignment_min(
     size_t m,
     vector[int]& row_ind,
     vector[int]& col_ind,
-) except *:
+) noexcept nogil:
     row_ind.clear()
     col_ind.clear()
     if n == 0 or m == 0:

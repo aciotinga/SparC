@@ -1,3 +1,4 @@
+from libc.stdint cimport uint64_t
 from libcpp.unordered_map cimport unordered_map
 from libcpp.vector cimport vector
 
@@ -10,6 +11,14 @@ cdef inline size_t obj_id(CircuitNode n) noexcept:
     return <size_t><void*>n
 
 
+# Every coupled pair has exactly one node from circuit 1 (side 0) and one from
+# circuit 2 (side 1); CW/expectation never swap sides, so packing the ordered
+# (P.id, Q.id) pair into a single 64-bit key is lossless and lets a flat
+# integer-keyed map replace the old nested pointer-keyed maps.
+cdef inline uint64_t pair_key(CircuitNode P, CircuitNode Q) noexcept:
+    return (<uint64_t>P.id << 32) | <uint64_t>Q.id
+
+
 cdef class TapeEntry:
     cdef int side_P
     cdef int side_Q
@@ -20,11 +29,11 @@ cdef class TapeEntry:
 
 
 cdef class CoupleContext:
-    cdef unordered_map[size_t, unordered_map[size_t, double]] couple_memo
+    cdef unordered_map[uint64_t, double] couple_memo
     cdef bint recording
     cdef list tape
     cdef vector[double] tape_adjoints
-    cdef unordered_map[size_t, unordered_map[size_t, size_t]] pair_to_tape
+    cdef unordered_map[uint64_t, size_t] pair_to_tape
     cdef dict sum_grads0
     cdef dict cat_grads0
     cdef dict sum_grads1

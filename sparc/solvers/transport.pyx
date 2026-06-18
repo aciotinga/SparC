@@ -27,7 +27,7 @@ cdef int _find_initial_basis(
     size_t m,
     vector[char]& is_basic,
     vector[double]& x,
-) except -1:
+) except -1 nogil:
     """Northwest-corner basic feasible solution, completed to a spanning tree."""
     cdef vector[double] s = sup
     cdef vector[double] d = dem
@@ -99,7 +99,7 @@ cdef void _compute_potentials(
     size_t m,
     vector[double]& u,
     vector[double]& v,
-) noexcept:
+) noexcept nogil:
     """Solve u_i + v_j = c_ij over the basis spanning tree (gauge u_0 = 0)."""
     cdef vector[char] u_known
     cdef vector[char] v_known
@@ -136,7 +136,7 @@ cdef bint _find_loop(
     size_t enter_i,
     size_t enter_j,
     vector[size_t]& loop_cells,
-) except *:
+) noexcept nogil:
     """Find the unique cycle created by adding cell (enter_i, enter_j) to the
     basis tree. Returns cells in cyclic order starting with the entering cell.
     """
@@ -203,9 +203,10 @@ cdef int transport_with_duals(
     vector[double]& plan_out,
     vector[double]& u_out,
     vector[double]& v_out,
-) except -1:
+) except -1 nogil:
     if n == 0 or m == 0:
-        raise ValueError("transport: empty marginals")
+        with gil:
+            raise ValueError("transport: empty marginals")
     cdef double s_sum = 0.0
     cdef double d_sum = 0.0
     cdef size_t i
@@ -215,9 +216,10 @@ cdef int transport_with_duals(
     for j in range(m):
         d_sum += demand[j]
     if fabs(s_sum - d_sum) > 1e-6:
-        raise ValueError(
-            f"transport: unbalanced marginals (supply={s_sum}, demand={d_sum})"
-        )
+        with gil:
+            raise ValueError(
+                f"transport: unbalanced marginals (supply={s_sum}, demand={d_sum})"
+            )
 
     # Perturb rhs with tiny distinct amounts for non-degeneracy.
     cdef double eps = 1e-9
@@ -271,7 +273,8 @@ cdef int transport_with_duals(
         enter_i = enter // m
         enter_j = enter % m
         if not _find_loop(is_basic, n, m, enter_i, enter_j, loop_cells):
-            raise RuntimeError("transport: failed to find pivot loop")
+            with gil:
+                raise RuntimeError("transport: failed to find pivot loop")
         # Odd positions (1, 3, ...) are the minus cells.
         theta = -1.0
         leave_pos = 0
@@ -306,7 +309,7 @@ cdef void _solve_tree_flows(
     size_t n,
     size_t m,
     vector[double]& plan_out,
-) except *:
+) noexcept nogil:
     """Exact flows on the basis spanning tree via leaf elimination."""
     plan_out.assign(n * m, 0.0)
     cdef vector[double] res_sup = supply

@@ -9,10 +9,11 @@ circuit queries simply return a pair of ``GradBundle`` objects.
 
 from libcpp.unordered_map cimport unordered_map
 from libcpp.vector cimport vector
-from libc.math cimport exp
+from libc.math cimport exp, INFINITY, isfinite, log
 
 import numpy as np
 
+from sparc._graph cimport CompiledGraph
 from sparc._mathutils cimport sp_logsumexp, sp_safe_log
 from sparc.nodes cimport (
     BernoulliInputNode,
@@ -215,6 +216,220 @@ cdef class _LLGradContext:
         return (grads.value, grads)
 
 
+# --- Flattened nogil gradient path --------------------------------------------
+
+cdef void _build_grad_matrix(
+    CompiledGraph g, list dataset, vector[int]& mat, Py_ssize_t n_rows
+) except *:
+    """Dense (n_rows x width) evidence matrix with object-path validation."""
+    cdef size_t width = <size_t>(g.max_var + 1)
+    cdef Py_ssize_t r
+    cdef object dp
+    cdef object key
+    cdef object value
+    cdef int var
+    cdef int outcome
+    cdef size_t base
+    cdef size_t n
+    cdef int v
+    cdef int val
+    cdef int card
+    mat.assign(<size_t>n_rows * width, -1)
+    for r in range(n_rows):
+        dp = dataset[r]
+        base = <size_t>r * width
+        for key, value in dp.items():
+            var = int(key)
+            outcome = int(value)
+            if var < 0:
+                raise ValueError(f"variable index must be non-negative, got {var}")
+            if outcome < 0:
+                raise ValueError(f"outcome value must be non-negative, got {outcome}")
+            if var <= g.max_var:
+                mat[base + <size_t>var] = outcome
+        for n in range(g.n_nodes):
+            if g.kinds[n] == NODE_INPUT:
+                v = g.leaf_var[n]
+                val = mat[base + <size_t>v]
+                card = g.leaf_card[n]
+                if val < 0:
+                    raise ValueError(f"missing evidence for variable {v}")
+                if val >= card:
+                    raise ValueError(
+                        f"evidence for variable {v}: outcome {val} out of range "
+                        f"[0, {card})"
+                    )
+
+
+cdef void _flat_grad_core(
+    CompiledGraph g,
+    const int* mat,
+    Py_ssize_t n_rows,
+    size_t width,
+    double* val,
+    double* adj,
+    double* sum_pool,
+    double* cat_pool,
+    double inv_n,
+    double* total_ll_out,
+) noexcept nogil:
+    cdef Py_ssize_t r
+    cdef ssize_t ni
+    cdef size_t n
+    cdef size_t k
+    cdef size_t start
+    cdef size_t stop
+    cdef size_t base
+    cdef size_t off
+    cdef size_t child
+    cdef int kind
+    cdef int var
+    cdef int value
+    cdef double acc
+    cdef double max_log
+    cdef double sum_exp
+    cdef double term
+    cdef double bar
+    cdef double ll
+    cdef double child_ll
+    cdef double log_w
+    cdef double p_v
+    cdef double total = 0.0
+    for r in range(n_rows):
+        base = <size_t>r * width
+        # Forward (log-space), filling val[].
+        for n in range(g.n_nodes):
+            kind = g.kinds[n]
+            if kind == NODE_INPUT:
+                var = g.leaf_var[n]
+                value = mat[base + <size_t>var]
+                val[n] = g.leaf_logpmf_flat[g.leaf_pmf_off[n] + <size_t>value]
+            elif kind == NODE_PRODUCT:
+                start = g.child_off[n]
+                stop = g.child_off[n + 1]
+                acc = 0.0
+                for k in range(start, stop):
+                    acc += val[g.children_flat[k]]
+                val[n] = acc
+            else:
+                start = g.child_off[n]
+                stop = g.child_off[n + 1]
+                max_log = -INFINITY
+                for k in range(start, stop):
+                    term = g.sum_logw_flat[k] + val[g.children_flat[k]]
+                    if term > max_log:
+                        max_log = term
+                if (not isfinite(max_log)) or max_log == -INFINITY:
+                    val[n] = -INFINITY
+                else:
+                    sum_exp = 0.0
+                    for k in range(start, stop):
+                        term = g.sum_logw_flat[k] + val[g.children_flat[k]]
+                        if isfinite(term) and term > -INFINITY:
+                            sum_exp += exp(term - max_log)
+                    if sum_exp <= 0.0:
+                        val[n] = -INFINITY
+                    else:
+                        val[n] = max_log + log(sum_exp)
+        total += val[g.root_index]
+        if val[g.root_index] <= -INFINITY:
+            continue
+        # Reverse-mode backward over the post-order (parents before children).
+        for n in range(g.n_nodes):
+            adj[n] = 0.0
+        adj[g.root_index] = inv_n
+        for ni in range(<ssize_t>g.n_nodes - 1, -1, -1):
+            n = <size_t>ni
+            bar = adj[n]
+            if bar == 0.0:
+                continue
+            kind = g.kinds[n]
+            if kind == NODE_INPUT:
+                if g.leaf_trainable[n]:
+                    var = g.leaf_var[n]
+                    value = mat[base + <size_t>var]
+                    off = g.leaf_pmf_off[n]
+                    p_v = g.leaf_pmf_flat[off + <size_t>value]
+                    if p_v > 0.0:
+                        cat_pool[off + <size_t>value] += bar / p_v
+            elif kind == NODE_PRODUCT:
+                start = g.child_off[n]
+                stop = g.child_off[n + 1]
+                for k in range(start, stop):
+                    adj[g.children_flat[k]] += bar
+            else:
+                ll = val[n]
+                if ll == -INFINITY:
+                    continue
+                start = g.child_off[n]
+                stop = g.child_off[n + 1]
+                for k in range(start, stop):
+                    child = g.children_flat[k]
+                    child_ll = val[child]
+                    log_w = g.sum_logw_flat[k]
+                    if log_w > -INFINITY and child_ll > -INFINITY:
+                        adj[child] += bar * exp(log_w + child_ll - ll)
+                    if child_ll > -INFINITY:
+                        sum_pool[k] += bar * exp(child_ll - ll)
+    total_ll_out[0] = total
+
+
+cdef tuple _flat_solve_dataset(CompiledGraph g, list dataset):
+    cdef Py_ssize_t n = len(dataset)
+    if n == 0:
+        raise ValueError("dataset must contain at least one datapoint")
+    cdef double inv_n = 1.0 / <double>n
+    cdef size_t width = <size_t>(g.max_var + 1)
+    cdef vector[int] mat
+    _build_grad_matrix(g, dataset, mat, n)
+
+    cdef vector[double] val
+    cdef vector[double] adj
+    cdef vector[double] sum_pool
+    cdef vector[double] cat_pool
+    val.assign(g.n_nodes, 0.0)
+    adj.assign(g.n_nodes, 0.0)
+    sum_pool.assign(g.children_flat.size(), 0.0)
+    cat_pool.assign(g.leaf_pmf_flat.size(), 0.0)
+    cdef double total_ll = 0.0
+    with nogil:
+        _flat_grad_core(
+            g, mat.data(), n, width,
+            val.data(), adj.data(), sum_pool.data(), cat_pool.data(),
+            inv_n, &total_ll,
+        )
+
+    cdef GradBundle grads = GradBundle()
+    grads.value = total_ll * inv_n
+    cdef dict sum_grads = {}
+    cdef dict cat_grads = {}
+    cdef size_t nn
+    cdef size_t start
+    cdef size_t stop
+    cdef size_t off
+    cdef size_t k
+    cdef int card
+    cdef object arr
+    for nn in range(g.n_nodes):
+        if g.kinds[nn] == NODE_SUM:
+            start = g.child_off[nn]
+            stop = g.child_off[nn + 1]
+            arr = np.empty(stop - start, dtype=np.float64)
+            for k in range(start, stop):
+                arr[k - start] = sum_pool[k]
+            sum_grads[g.node_ids[nn]] = arr
+        elif g.kinds[nn] == NODE_INPUT and g.leaf_trainable[nn]:
+            off = g.leaf_pmf_off[nn]
+            card = g.leaf_card[nn]
+            arr = np.empty(card, dtype=np.float64)
+            for k in range(<size_t>card):
+                arr[k] = cat_pool[off + k]
+            cat_grads[g.node_ids[nn]] = arr
+    grads.sum_grads = sum_grads
+    grads.cat_grads = cat_grads
+    return (grads.value, grads)
+
+
 def mean_log_likelihood_and_grad(CircuitNode root, object dataset):
     """Mean log-likelihood of a dataset and its gradient w.r.t. circuit params.
 
@@ -229,5 +444,13 @@ def mean_log_likelihood_and_grad(CircuitNode root, object dataset):
     -------
     (mean_ll, grads) : tuple[float, GradBundle]
     """
-    cdef _LLGradContext ctx = _LLGradContext()
-    return ctx.solve_dataset(root, list(dataset))
+    cdef list data = list(dataset)
+    if root.scope.size() == 0:
+        raise ValueError(
+            "root scope is empty; call propagate_scope() on the circuit first"
+        )
+    cdef CompiledGraph g = CompiledGraph()
+    g.build(root)
+    if g.has_fallback:
+        return _LLGradContext().solve_dataset(root, data)
+    return _flat_solve_dataset(g, data)

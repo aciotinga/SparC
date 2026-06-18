@@ -14,7 +14,7 @@ cdef enum NodeKind:
 cdef class RandomState:
     cdef mt19937_64 rng
     cdef uniform_real_distribution[double] dist
-    cdef double next_double(self) noexcept
+    cdef double next_double(self) noexcept nogil
 
 cdef class Evidence:
     cdef unordered_map[int, int] _values

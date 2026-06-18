@@ -6,4 +6,4 @@ cdef void assignment_min(
     size_t m,
     vector[int]& row_ind,
     vector[int]& col_ind,
-) except *
+) noexcept nogil

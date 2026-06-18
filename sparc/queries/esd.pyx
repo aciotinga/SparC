@@ -12,6 +12,9 @@ from cython.operator cimport dereference as deref
 from libcpp.unordered_map cimport unordered_map
 from libcpp.vector cimport vector
 
+import numpy as np
+
+from sparc._graph cimport CompiledGraph
 from sparc.grad cimport GradBundle, grad_arr
 from sparc.metrics cimport GroundMetric, PNormMetric
 from sparc.nodes cimport (
@@ -216,6 +219,246 @@ cdef CircuitNode _unwrap(object circuit):
     raise TypeError("expected a Circuit or CircuitNode")
 
 
+# --- Flattened nogil fast path ------------------------------------------------
+
+cdef void _build_dist_pool(
+    CompiledGraph g, GroundMetric metric,
+    vector[size_t]& dist_off, vector[double]& dist_flat,
+) except *:
+    """Precompute each leaf's ground-distance matrix into a flat pool (GIL)."""
+    cdef size_t n
+    cdef size_t k
+    cdef int card
+    cdef size_t base
+    cdef vector[double] tmp
+    dist_off.assign(g.n_nodes + 1, 0)
+    for n in range(g.n_nodes):
+        if g.kinds[n] == NODE_INPUT:
+            card = g.leaf_card[n]
+            dist_off[n + 1] = <size_t>card * <size_t>card
+        else:
+            dist_off[n + 1] = 0
+    for n in range(g.n_nodes):
+        dist_off[n + 1] += dist_off[n]
+    dist_flat.assign(dist_off[g.n_nodes], 0.0)
+    for n in range(g.n_nodes):
+        if g.kinds[n] == NODE_INPUT:
+            card = g.leaf_card[n]
+            metric.pairwise(g.leaf_var[n], <size_t>card, tmp)
+            base = dist_off[n]
+            for k in range(<size_t>card * <size_t>card):
+                dist_flat[base + k] = tmp[k]
+
+
+cdef void _flat_esd_forward(
+    CompiledGraph g, const size_t* dist_off, const double* dist_flat,
+    double* mu, double* nu,
+) noexcept nogil:
+    cdef size_t n
+    cdef size_t k
+    cdef size_t a
+    cdef size_t b
+    cdef size_t start
+    cdef size_t stop
+    cdef size_t poff
+    cdef size_t doff
+    cdef size_t child
+    cdef int kind
+    cdef int card
+    cdef double tmu
+    cdef double tnu
+    cdef double sumsq
+    cdef double pa
+    cdef double pb
+    cdef double dab
+    cdef double cmu
+    cdef double cnu
+    for n in range(g.n_nodes):
+        kind = g.kinds[n]
+        if kind == NODE_INPUT:
+            card = g.leaf_card[n]
+            poff = g.leaf_pmf_off[n]
+            doff = dist_off[n]
+            tmu = 0.0
+            tnu = 0.0
+            for a in range(<size_t>card):
+                pa = g.leaf_pmf_flat[poff + a]
+                for b in range(<size_t>card):
+                    dab = dist_flat[doff + a * <size_t>card + b]
+                    pb = g.leaf_pmf_flat[poff + b]
+                    tmu += pa * dab * pb
+                    tnu += pa * dab * dab * pb
+            mu[n] = tmu
+            nu[n] = tnu
+        elif kind == NODE_PRODUCT:
+            start = g.child_off[n]
+            stop = g.child_off[n + 1]
+            tmu = 0.0
+            tnu = 0.0
+            sumsq = 0.0
+            for k in range(start, stop):
+                child = g.children_flat[k]
+                cmu = mu[child]
+                cnu = nu[child]
+                tmu += cmu
+                tnu += cnu
+                sumsq += cmu * cmu
+            mu[n] = tmu
+            nu[n] = tnu + tmu * tmu - sumsq
+        else:  # NODE_SUM
+            start = g.child_off[n]
+            stop = g.child_off[n + 1]
+            tmu = 0.0
+            tnu = 0.0
+            for k in range(start, stop):
+                child = g.children_flat[k]
+                tmu += g.sum_w_flat[k] * mu[child]
+                tnu += g.sum_w_flat[k] * nu[child]
+            mu[n] = tmu
+            nu[n] = tnu
+
+
+cdef void _flat_esd_backward(
+    CompiledGraph g, const size_t* dist_off, const double* dist_flat,
+    const double* mu, const double* nu,
+    double* bar_mu, double* bar_nu,
+    double* cat_pool, double* sum_pool,
+) noexcept nogil:
+    cdef ssize_t ni
+    cdef size_t n
+    cdef size_t k
+    cdef size_t kk
+    cdef size_t j
+    cdef size_t start
+    cdef size_t stop
+    cdef size_t poff
+    cdef size_t doff
+    cdef size_t coff
+    cdef size_t child
+    cdef int kind
+    cdef int card
+    cdef double amu
+    cdef double anu
+    cdef double acc
+    cdef double acc2
+    cdef double dab
+    cdef double cmu
+    cdef double cnu
+    cdef double theta
+    cdef double mu_node
+    for n in range(g.n_nodes):
+        bar_mu[n] = 0.0
+        bar_nu[n] = 0.0
+    bar_nu[g.root_index] = 1.0
+    for ni in range(<ssize_t>g.n_nodes - 1, -1, -1):
+        n = <size_t>ni
+        amu = bar_mu[n]
+        anu = bar_nu[n]
+        if amu == 0.0 and anu == 0.0:
+            continue
+        kind = g.kinds[n]
+        if kind == NODE_INPUT:
+            card = g.leaf_card[n]
+            poff = g.leaf_pmf_off[n]
+            doff = dist_off[n]
+            coff = g.leaf_pmf_off[n]
+            for kk in range(<size_t>card):
+                acc = 0.0
+                acc2 = 0.0
+                for j in range(<size_t>card):
+                    dab = dist_flat[doff + kk * <size_t>card + j]
+                    acc += dab * g.leaf_pmf_flat[poff + j]
+                    acc2 += dab * dab * g.leaf_pmf_flat[poff + j]
+                cat_pool[coff + kk] += amu * 2.0 * acc + anu * 2.0 * acc2
+        elif kind == NODE_SUM:
+            start = g.child_off[n]
+            stop = g.child_off[n + 1]
+            for k in range(start, stop):
+                child = g.children_flat[k]
+                cmu = mu[child]
+                cnu = nu[child]
+                theta = g.sum_w_flat[k]
+                sum_pool[k] += anu * cnu + amu * cmu
+                bar_mu[child] += amu * theta
+                bar_nu[child] += anu * theta
+        else:  # NODE_PRODUCT
+            mu_node = mu[n]
+            start = g.child_off[n]
+            stop = g.child_off[n + 1]
+            for k in range(start, stop):
+                child = g.children_flat[k]
+                cmu = mu[child]
+                bar_mu[child] += amu + anu * (2.0 * mu_node - 2.0 * cmu)
+                bar_nu[child] += anu
+
+
+cdef double _flat_esd_solve(CompiledGraph g, GroundMetric metric) except *:
+    cdef vector[size_t] dist_off
+    cdef vector[double] dist_flat
+    _build_dist_pool(g, metric, dist_off, dist_flat)
+    cdef vector[double] mu
+    cdef vector[double] nu
+    mu.assign(g.n_nodes, 0.0)
+    nu.assign(g.n_nodes, 0.0)
+    with nogil:
+        _flat_esd_forward(g, dist_off.data(), dist_flat.data(), mu.data(), nu.data())
+    return nu[g.root_index]
+
+
+cdef tuple _flat_esd_solve_with_grad(CompiledGraph g, GroundMetric metric):
+    cdef vector[size_t] dist_off
+    cdef vector[double] dist_flat
+    _build_dist_pool(g, metric, dist_off, dist_flat)
+    cdef vector[double] mu
+    cdef vector[double] nu
+    cdef vector[double] bar_mu
+    cdef vector[double] bar_nu
+    cdef vector[double] cat_pool
+    cdef vector[double] sum_pool
+    mu.assign(g.n_nodes, 0.0)
+    nu.assign(g.n_nodes, 0.0)
+    bar_mu.assign(g.n_nodes, 0.0)
+    bar_nu.assign(g.n_nodes, 0.0)
+    cat_pool.assign(g.leaf_pmf_flat.size(), 0.0)
+    sum_pool.assign(g.children_flat.size(), 0.0)
+    with nogil:
+        _flat_esd_forward(g, dist_off.data(), dist_flat.data(), mu.data(), nu.data())
+        _flat_esd_backward(
+            g, dist_off.data(), dist_flat.data(), mu.data(), nu.data(),
+            bar_mu.data(), bar_nu.data(), cat_pool.data(), sum_pool.data(),
+        )
+    cdef double value = nu[g.root_index]
+    cdef GradBundle grads = GradBundle()
+    grads.value = value
+    cdef dict sum_grads = {}
+    cdef dict cat_grads = {}
+    cdef size_t nn
+    cdef size_t start
+    cdef size_t stop
+    cdef size_t off
+    cdef size_t k
+    cdef int card
+    cdef object arr
+    for nn in range(g.n_nodes):
+        if g.kinds[nn] == NODE_SUM:
+            start = g.child_off[nn]
+            stop = g.child_off[nn + 1]
+            arr = np.empty(stop - start, dtype=np.float64)
+            for k in range(start, stop):
+                arr[k - start] = sum_pool[k]
+            sum_grads[g.node_ids[nn]] = arr
+        elif g.kinds[nn] == NODE_INPUT:
+            off = g.leaf_pmf_off[nn]
+            card = g.leaf_card[nn]
+            arr = np.empty(card, dtype=np.float64)
+            for k in range(<size_t>card):
+                arr[k] = cat_pool[off + k]
+            cat_grads[g.node_ids[nn]] = arr
+    grads.sum_grads = sum_grads
+    grads.cat_grads = cat_grads
+    return (value, grads)
+
+
 cpdef double expected_squared_distance(
     object circuit,
     double metric_p=1.0,
@@ -224,9 +467,14 @@ cpdef double expected_squared_distance(
 ) except *:
     """Compute E[d(X, X')^2] for two independent draws from ``circuit``."""
     cdef CircuitNode root = _unwrap(circuit)
-    cdef _ESDContext ctx = _ESDContext()
-    ctx.metric = metric if metric is not None else PNormMetric(metric_p, scale_factor)
-    return ctx.solve(root)
+    cdef GroundMetric m = metric if metric is not None else PNormMetric(metric_p, scale_factor)
+    cdef CompiledGraph g = CompiledGraph()
+    g.build(root)
+    if g.has_fallback:
+        ctx = _ESDContext()
+        ctx.metric = m
+        return ctx.solve(root)
+    return _flat_esd_solve(g, m)
 
 
 cpdef tuple expected_squared_distance_and_grad(
@@ -237,6 +485,11 @@ cpdef tuple expected_squared_distance_and_grad(
 ):
     """Compute E[d(X, X')^2] and its gradient w.r.t. all circuit parameters."""
     cdef CircuitNode root = _unwrap(circuit)
-    cdef _ESDContext ctx = _ESDContext()
-    ctx.metric = metric if metric is not None else PNormMetric(metric_p, scale_factor)
-    return ctx.solve_with_grad(root)
+    cdef GroundMetric m = metric if metric is not None else PNormMetric(metric_p, scale_factor)
+    cdef CompiledGraph g = CompiledGraph()
+    g.build(root)
+    if g.has_fallback:
+        ctx = _ESDContext()
+        ctx.metric = m
+        return ctx.solve_with_grad(root)
+    return _flat_esd_solve_with_grad(g, m)

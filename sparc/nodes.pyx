@@ -69,7 +69,7 @@ cdef class RandomState:
     def __cinit__(self, unsigned long long seed):
         self.rng = mt19937_64(seed)
 
-    cdef inline double next_double(self) noexcept:
+    cdef inline double next_double(self) noexcept nogil:
         return self.dist(self.rng)
 
 

@@ -9,4 +9,4 @@ cdef int transport_with_duals(
     vector[double]& plan_out,
     vector[double]& u_out,
     vector[double]& v_out,
-) except -1
+) except -1 nogil
