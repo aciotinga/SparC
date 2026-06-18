@@ -1,3 +1,6 @@
+# MkDocs build output
+site/
+
 # Byte-compiled / cache
 __pycache__/
 *.py[cod]

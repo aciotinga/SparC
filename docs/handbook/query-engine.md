@@ -1,7 +1,7 @@
 # Query Engine
 
 Pairwise queries (CW, GCW, expectation) share machinery in
-[`sparc.queries._engine`][sparc.queries._engine].
+the internal module `sparc.queries._engine`.
 
 ## CoupleContext
 

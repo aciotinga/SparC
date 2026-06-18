@@ -24,8 +24,8 @@ dependencies = [
 gurobi = ["gurobipy>=11.0"]
 dev = ["pytest>=7.0", "pytest-randomly>=3.15", "scipy>=1.7"]
 docs = [
-    "mkdocs",
-    "mkdocs-material",
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.5,<10",
     "mkdocstrings-python",
     "mkdocs-gen-files",
     "mkdocs-literate-nav",

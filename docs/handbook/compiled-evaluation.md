@@ -1,7 +1,8 @@
 # Compiled Evaluation
 
 Batched log-likelihood and several query fast paths flatten the circuit DAG
-into a **`CompiledGraph`** ([`sparc._graph`][sparc._graph]) or user-facing
+into a **`CompiledGraph`** (internal module `sparc._graph`; see
+[architecture](architecture.md)) or user-facing
 **`CompiledCircuit`** ([`sparc.eval.CompiledCircuit`][sparc.eval.CompiledCircuit]).
 
 ## Why flatten?

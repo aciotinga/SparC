@@ -12,14 +12,12 @@ nav = mkdocs_gen_files.Nav()
 root = Path(__file__).parent.parent
 src = root / "sparc"
 
-# Cython extension modules (no .py source on disk).
+# Cython extension modules with a public Python API (no .py source on disk).
 EXTENSION_MODULES = (
     "sparc.nodes",
     "sparc.eval",
     "sparc.grad",
     "sparc.metrics",
-    "sparc._graph",
-    "sparc.queries._engine",
     "sparc.queries.cw",
     "sparc.queries.gcw",
     "sparc.queries.expectation",
@@ -29,11 +27,24 @@ EXTENSION_MODULES = (
     "sparc.solvers.northwest",
 )
 
+# Internal modules documented in the handbook, not the API reference.
+SKIP_MODULES = {
+    "sparc._graph",
+    "sparc.queries._engine",
+    "sparc.builders._factory",
+    "sparc.structures._blocks",
+    "sparc.structures._chowliu",
+}
+
 seen = set()
 
 
+def _is_private_module(ident: str) -> bool:
+    return any(part.startswith("_") and part != "__init__" for part in ident.split("."))
+
+
 def _add_module(ident: str, doc_path: Path) -> None:
-    if ident in seen:
+    if ident in seen or ident in SKIP_MODULES or _is_private_module(ident):
         return
     seen.add(ident)
     parts = tuple(ident.split("."))
@@ -56,7 +67,8 @@ for path in sorted(src.rglob("*.py")):
 
     ident = ".".join(parts)
     _add_module(ident, doc_path)
-    mkdocs_gen_files.set_edit_path(Path("api", doc_path), path.relative_to(root))
+    if ident not in SKIP_MODULES and not _is_private_module(ident):
+        mkdocs_gen_files.set_edit_path(Path("api", doc_path), path.relative_to(root))
 
 for ident in EXTENSION_MODULES:
     parts = tuple(ident.split("."))

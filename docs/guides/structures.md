@@ -49,8 +49,8 @@ circuit = GeneralizedHMM(
 
 ## Block algebra
 
-Internally, structures compose [`Block`][sparc.structures._blocks.Block]
-objects (lists of sum nodes) via product and sum operations. This keeps
+Internally, structures compose `Block` objects (lists of sum nodes; see
+`_blocks.py`) via product and sum operations. This keeps
 structure code independent of the Cython node layer.
 
 See the [architecture handbook](../handbook/architecture.md) for how builders,

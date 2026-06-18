@@ -47,4 +47,4 @@ circuits written in Cython.
 - **Minimal deps**: `numpy` only at runtime.
 
 See the [handbook](handbook/architecture.md) for internal architecture and the
-[API reference](api/sparc/__init__/) for generated documentation from docstrings.
+[API reference](api/overview.md) for generated documentation from docstrings.

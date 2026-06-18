@@ -26,10 +26,10 @@ Pass your metric to CW/GCW/ESD query functions via the `metric` argument.
 
 ## New pairwise query
 
-1. Subclass [`CoupleContext`][sparc.queries._engine.CoupleContext] in a new
-   Cython module under `sparc/queries/`.
+1. Subclass `CoupleContext` (in `sparc/queries/_engine.pyx`) in a new Cython
+   module under `sparc/queries/`.
 2. Implement `couple_value` for the forward recursion.
-3. Define [`TapeEntry`][sparc.queries._engine.TapeEntry] subclasses with
+3. Define `TapeEntry` subclasses with
    `backward` methods for reverse-mode gradients.
 4. Export `cpdef` wrapper functions and add them to `sparc/queries/__init__.py`.
 
@@ -39,7 +39,7 @@ tape, memo, and product-child matching machinery.
 ## New structure
 
 Add a constructor under `sparc/structures/` using the block algebra in
-[`_blocks.py`][sparc.structures._blocks] and pluggable
+`_blocks.py` and pluggable
 [`InputDistribution`][sparc.structures.distributions] specs.
 
 ## Example scripts
