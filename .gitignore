@@ -1,0 +1,65 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# Cython / C++ build artifacts
+*.c
+*.cpp
+*.html
+
+# Distribution / packaging
+build/
+dist/
+*.egg
+*.egg-info/
+*.whl
+pip-wheel-metadata/
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing / type checking
+.pytest_cache/
+.mypy_cache/
+.vscode/
+optimal-transport/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / editors
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# Logs / local scratch
+*.log
+*.tmp
+.cache/

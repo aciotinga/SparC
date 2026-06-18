@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61", "wheel", "Cython>=3.0", "numpy>=1.20"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sparc"
+version = "0.1.0"
+description = "SparC: fast, modular sparse probabilistic circuits in Cython (CPU-only)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [{ name = "SparC contributors" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Cython",
+]
+dependencies = [
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+gurobi = ["gurobipy>=11.0"]
+pyjuice = ["pyjuice", "torch"]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sparc*"]
+
+[tool.setuptools.package-data]
+"sparc" = ["*.pyi", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gurobi: requires gurobipy and a valid Gurobi license",
+    "pyjuice: requires pyjuice and torch",
+]
