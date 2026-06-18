@@ -1508,7 +1508,11 @@ cdef class GCWContext(CoupleContext):
     cdef object _embed(self, CircuitNode node, int side):
         """Clone a single circuit's subtree into the coupling space, offsetting
         circuit2 (``side == 1``) variables so the two namespaces stay disjoint."""
-        cdef uint64_t key = (<uint64_t>obj_id(node) << 1) | <uint64_t>side
+        # Key on the dense node ``id`` + side, not the raw object address:
+        # shifting a 64-bit pointer left loses high bits and can collide across
+        # heap layouts. ``id`` is unique within a circuit and ``side`` separates
+        # the two circuits, so this packing is lossless.
+        cdef uint64_t key = (<uint64_t>node.id << 1) | <uint64_t>side
         cdef object cached = self._mat_embed_memo.get(key)
         cdef FiniteDiscreteInputNode leaf
         cdef SumNode s
@@ -1543,7 +1547,11 @@ cdef class GCWContext(CoupleContext):
         return out
 
     cdef object _materialize(self, CircuitNode P, CircuitNode Q, int sP, int sQ):
-        cdef uint64_t key = (<uint64_t>obj_id(P) << 32) | <uint64_t>obj_id(Q)
+        # Key on the dense node ``id``s (< 2**32), not raw object addresses:
+        # ``obj_id`` returns a 64-bit pointer, so ``<< 32`` would discard the
+        # high bits of P and overlap with Q on 64-bit builds, colliding distinct
+        # pairs and returning the wrong cached subtree (heap-layout dependent).
+        cdef uint64_t key = self._pair_key(P, Q, sP, sQ)
         cdef object cached = self._mat_memo.get(key)
         if cached is not None:
             return cached
