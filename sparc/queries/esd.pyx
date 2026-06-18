@@ -465,7 +465,17 @@ cpdef double expected_squared_distance(
     double scale_factor=1.0,
     object metric=None,
 ) except *:
-    """Compute E[d(X, X')^2] for two independent draws from ``circuit``."""
+    r"""Compute :math:`E[d(X, X')^p]` for two independent draws from ``circuit``.
+
+    Args:
+        circuit: Source circuit (:class:`~sparc.circuit.Circuit` or root node).
+        metric_p: Exponent for the default :class:`PNormMetric`.
+        scale_factor: Scale for the default metric.
+        metric: Optional :class:`GroundMetric` instance.
+
+    Returns:
+        Expected squared-distance objective under the ground metric.
+    """
     cdef CircuitNode root = _unwrap(circuit)
     cdef GroundMetric m = metric if metric is not None else PNormMetric(metric_p, scale_factor)
     cdef CompiledGraph g = CompiledGraph()
@@ -483,7 +493,17 @@ cpdef tuple expected_squared_distance_and_grad(
     double scale_factor=1.0,
     object metric=None,
 ):
-    """Compute E[d(X, X')^2] and its gradient w.r.t. all circuit parameters."""
+    r"""Compute ESD and its gradient w.r.t. all circuit parameters.
+
+    Args:
+        circuit: Source circuit (:class:`~sparc.circuit.Circuit` or root node).
+        metric_p: Exponent for the default :class:`PNormMetric`.
+        scale_factor: Scale for the default metric.
+        metric: Optional :class:`GroundMetric` instance.
+
+    Returns:
+        ``(value, grads)`` where ``grads`` is a :class:`~sparc.grad.GradBundle`.
+    """
     cdef CircuitNode root = _unwrap(circuit)
     cdef GroundMetric m = metric if metric is not None else PNormMetric(metric_p, scale_factor)
     cdef CompiledGraph g = CompiledGraph()

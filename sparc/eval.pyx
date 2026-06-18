@@ -251,10 +251,28 @@ cdef double _dispatch_query(CircuitNode root, object assignment, bint log_space)
 
 
 cpdef double likelihood(CircuitNode root, object assignment) except *:
+    """Evaluate the probability of a single complete assignment.
+
+    Args:
+        root: Circuit root node with propagated scope.
+        assignment: ``{var: value}`` mapping covering the root scope.
+
+    Returns:
+        The likelihood :math:`P(\\mathbf{x})`.
+    """
     return _dispatch_query(root, assignment, False)
 
 
 cpdef double log_likelihood(CircuitNode root, object assignment) except *:
+    """Evaluate the log-probability of a single complete assignment.
+
+    Args:
+        root: Circuit root node with propagated scope.
+        assignment: ``{var: value}`` mapping covering the root scope.
+
+    Returns:
+        The log-likelihood :math:`\\log P(\\mathbf{x})`.
+    """
     return _dispatch_query(root, assignment, True)
 
 
@@ -346,6 +364,16 @@ cdef list _sample_object(CircuitNode root, Py_ssize_t n_samples, RandomState rng
 
 
 cpdef list sample(CircuitNode root, Py_ssize_t n_samples, object seed=None):
+    """Draw ancestral samples from a circuit.
+
+    Args:
+        root: Circuit root node with propagated scope.
+        n_samples: Number of independent samples (must be non-negative).
+        seed: Optional RNG seed; defaults to a time-based seed when omitted.
+
+    Returns:
+        List of ``{var: value}`` assignment dicts, one per sample.
+    """
     if root.scope.size() == 0:
         raise ValueError(
             "root scope is empty; call propagate_scope() on the circuit first"
@@ -502,15 +530,15 @@ cdef class CompiledCircuit:
         index_of[node.id] = len(order) - 1
 
     def log_likelihood(self, object data, object var_to_col=None):
-        """Batched log-likelihood.
+        """Batched log-likelihood over a 2-D integer dataset.
 
-        Parameters
-        ----------
-        data : array-like, shape (N, C)
-            Integer outcome per (sample, column).
-        var_to_col : dict[int, int] | None
-            Maps a circuit variable index to its column in ``data``. Defaults to
-            the identity over ``self.variables`` (column == variable index).
+        Args:
+            data: Integer array of shape ``(n_samples, n_columns)``.
+            var_to_col: Optional mapping from circuit variable index to column
+                in ``data``. Defaults to identity over ``self.variables``.
+
+        Returns:
+            1-D float64 array of log-likelihoods, one per row of ``data``.
         """
         cdef object arr = np.ascontiguousarray(data, dtype=np.int32)
         if arr.ndim != 2:

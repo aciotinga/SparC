@@ -1,4 +1,14 @@
-"""SparC: fast, modular sparse probabilistic circuits in Cython (CPU-only)."""
+"""SparC: fast, modular sparse probabilistic circuits in Cython (CPU-only).
+
+SparC implements probabilistic circuits (PCs) with typed Cython evaluation,
+differentiable Wasserstein-type queries, and composable structure builders.
+Import the high-level :class:`~sparc.circuit.Circuit` wrapper and query
+functions from this package; see subpackages :mod:`sparc.optim`,
+:mod:`sparc.builders`, :mod:`sparc.structures`, and :mod:`sparc.io` for
+training, random construction, built-in structures, and serialization.
+
+Full documentation: build locally with ``pip install -e ".[docs]" && mkdocs serve``.
+"""
 
 from sparc.circuit import Circuit
 from sparc.eval import CompiledCircuit, likelihood, log_likelihood, sample
@@ -33,7 +43,7 @@ from sparc.queries import (
     log_exp_query_and_grad,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.4.1"
 
 __all__ = [
     "Circuit",

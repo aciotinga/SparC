@@ -1,0 +1,85 @@
+site_name: SparC
+site_url: https://sparc-docs.readthedocs.io
+repo_url: https://github.com/adrianciotinga/sparc
+edit_uri: blob/main
+nav:
+  - Getting Started: "index.md"
+  - Getting Started:
+      - Installation: "getting-started/installation.md"
+      - Quick Start: "getting-started/quick-start.md"
+      - Training: "getting-started/training.md"
+  - Guides:
+      - Queries: "guides/queries.md"
+      - Structures: "guides/structures.md"
+      - Builders: "guides/builders.md"
+      - Serialization: "guides/serialization.md"
+      - Extending: "guides/extending.md"
+  - Examples: "examples/overview.md"
+  - Handbook:
+      - Architecture: "handbook/architecture.md"
+      - Query Engine: "handbook/query-engine.md"
+      - Compiled Evaluation: "handbook/compiled-evaluation.md"
+      - Solvers: "handbook/solvers.md"
+      - Serialization Format: "handbook/serialization-format.md"
+  - API documentation: "api/"
+plugins:
+  - search
+  - autorefs
+  - gen-files:
+      scripts:
+        - scripts/generate_api_pages.py
+  - literate-nav:
+      nav_file: overview.md
+  - section-index
+  - mkdocstrings:
+      handlers:
+        python:
+          inventories:
+            - https://docs.python.org/3/objects.inv
+            - https://numpy.org/doc/stable/objects.inv
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            signature_crossrefs: true
+            show_if_no_docstring: true
+theme:
+  name: "material"
+  palette:
+    primary: blue
+    accent: orange
+  features:
+    - content.action.edit
+    - content.action.view
+    - content.code.copy
+    - content.tooltips
+    - navigation.footer
+    - navigation.indexes
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+markdown_extensions:
+  - pymdownx.arithmatex:
+      generic: true
+  - attr_list
+  - md_in_html
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - toc:
+      permalink: "¤"
+extra_javascript:
+  - js/katex.js
+  - https://unpkg.com/katex@0/dist/katex.min.js
+  - https://unpkg.com/katex@0/dist/contrib/auto-render.min.js
+extra_css:
+  - css/style.css
+  - https://unpkg.com/katex@0/dist/katex.min.css

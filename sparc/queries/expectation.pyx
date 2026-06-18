@@ -1056,7 +1056,18 @@ cdef tuple _run_pair(CoupleContext ctx, CircuitNode r1, CircuitNode r2, double v
 
 
 cpdef double exp_query(object circuit1, object circuit2) except *:
-    """Compute E_Q[P(X)] = sum_x P(x) Q(x) for compatible PCs."""
+    r"""Compute :math:`E_Q[P(X)] = \sum_x P(x)\, Q(x)` for compatible PCs.
+
+    Args:
+        circuit1: Circuit defining :math:`P` (first factor).
+        circuit2: Circuit defining :math:`Q` (second factor).
+
+    Returns:
+        The expectation scalar.
+
+    Raises:
+        ValueError: If scopes or decompositions are incompatible.
+    """
     cdef CircuitNode r1 = _unwrap(circuit1)
     cdef CircuitNode r2 = _unwrap(circuit2)
     cdef ExpectationContext ctx = ExpectationContext()
@@ -1065,7 +1076,16 @@ cpdef double exp_query(object circuit1, object circuit2) except *:
 
 
 cpdef tuple exp_query_and_grad(object circuit1, object circuit2):
-    """Compute E_Q[P(X)] and exact gradients ``(value, grads1, grads2)``."""
+    r"""Compute :math:`E_Q[P(X)]` and exact gradients for both circuits.
+
+    Args:
+        circuit1: Circuit defining :math:`P`.
+        circuit2: Circuit defining :math:`Q`.
+
+    Returns:
+        ``(value, grads1, grads2)`` where each ``grads*`` is a
+        :class:`~sparc.grad.GradBundle`.
+    """
     cdef CircuitNode r1 = _unwrap(circuit1)
     cdef CircuitNode r2 = _unwrap(circuit2)
     cdef CompiledGraph g0 = CompiledGraph()
@@ -1087,7 +1107,15 @@ cpdef tuple exp_query_and_grad(object circuit1, object circuit2):
 
 
 cpdef double log_exp_query(object circuit1, object circuit2) except *:
-    """Compute log(E_Q[P(X)]) for compatible PCs."""
+    r"""Compute :math:`\log E_Q[P(X)]` for compatible PCs.
+
+    Args:
+        circuit1: Circuit defining :math:`P`.
+        circuit2: Circuit defining :math:`Q`.
+
+    Returns:
+        The log-expectation scalar.
+    """
     cdef CircuitNode r1 = _unwrap(circuit1)
     cdef CircuitNode r2 = _unwrap(circuit2)
     cdef LogExpectationContext ctx = LogExpectationContext()
@@ -1096,7 +1124,16 @@ cpdef double log_exp_query(object circuit1, object circuit2) except *:
 
 
 cpdef tuple log_exp_query_and_grad(object circuit1, object circuit2):
-    """Compute log(E_Q[P(X)]) and exact gradients ``(value, grads1, grads2)``."""
+    r"""Compute :math:`\log E_Q[P(X)]` and exact gradients for both circuits.
+
+    Args:
+        circuit1: Circuit defining :math:`P`.
+        circuit2: Circuit defining :math:`Q`.
+
+    Returns:
+        ``(value, grads1, grads2)`` where each ``grads*`` is a
+        :class:`~sparc.grad.GradBundle`.
+    """
     cdef CircuitNode r1 = _unwrap(circuit1)
     cdef CircuitNode r2 = _unwrap(circuit2)
     cdef CompiledGraph g0 = CompiledGraph()

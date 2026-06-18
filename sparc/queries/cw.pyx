@@ -588,7 +588,23 @@ cpdef double cw_distance(
     double scale_factor=1.0,
     object metric=None,
 ) except *:
-    """Compute the Circuit-Wasserstein ``W_p^p`` objective between two PCs."""
+    r"""Compute the Circuit-Wasserstein :math:`W_p^p` objective between two PCs.
+
+    Returns the additive :math:`W_p^p` value from the CW recursion; the
+    :math:`p`-th root is the CW distance. Circuits must be structurally
+    compatible (matching scopes and decompositions).
+
+    Args:
+        circuit1: First circuit (:class:`~sparc.circuit.Circuit` or root node).
+        circuit2: Second circuit.
+        metric_p: Exponent for the default :class:`PNormMetric` when ``metric``
+            is omitted.
+        scale_factor: Scale for the default metric.
+        metric: Optional :class:`GroundMetric` instance.
+
+    Returns:
+        The :math:`W_p^p` objective value.
+    """
     cdef CircuitNode r1 = _unwrap(circuit1)
     cdef CircuitNode r2 = _unwrap(circuit2)
     cdef CWContext ctx = CWContext()
@@ -604,10 +620,18 @@ cpdef tuple cw_distance_and_grad(
     double scale_factor=1.0,
     object metric=None,
 ):
-    """Compute CW ``W_p^p`` and subgradients w.r.t. ``circuit2``.
+    r"""Compute CW :math:`W_p^p` and subgradients w.r.t. ``circuit2``.
 
-    Returns ``(value, grads)`` with ``grads`` a :class:`~sparc.grad.GradBundle`
-    for ``circuit2`` nodes only.
+    Args:
+        circuit1: First circuit (:class:`~sparc.circuit.Circuit` or root node).
+        circuit2: Second circuit (receives gradients).
+        metric_p: Exponent for the default :class:`PNormMetric`.
+        scale_factor: Scale for the default metric.
+        metric: Optional :class:`GroundMetric` instance.
+
+    Returns:
+        ``(value, grads)`` where ``grads`` is a :class:`~sparc.grad.GradBundle`
+        over ``circuit2`` nodes only.
     """
     cdef CircuitNode r1 = _unwrap(circuit1)
     cdef CircuitNode r2 = _unwrap(circuit2)

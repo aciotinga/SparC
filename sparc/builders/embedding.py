@@ -30,7 +30,22 @@ _INPUT_DISTS = ("binomial", "categorical")
 
 
 class RegionEmbeddingBuilder:
-    """Build a block-structured PC from a region graph."""
+    """Build a block-structured PC from an explicit region graph.
+
+    Each region is realized as ``block_size`` parallel sum nodes; partitions
+    become product nodes over aligned sub-region blocks.
+
+    Args:
+        region_graph: Root :class:`~sparc.builders.region_graph.Region` with
+            partition tree.
+        num_categories: Cardinality of categorical (or binomial) leaves.
+        block_size: Number of parallel sum nodes per region.
+        sum_concentration: Dirichlet concentration for sum-node weights.
+        input_distribution: ``"categorical"`` or ``"binomial"``.
+        alpha: Dirichlet concentration for categorical leaves (required when
+            ``input_distribution="categorical"``).
+        scope_offset: Added to every leaf variable index.
+    """
 
     def __init__(
         self,
@@ -61,6 +76,12 @@ class RegionEmbeddingBuilder:
         self.scope_offset = scope_offset
 
     def build(self) -> Circuit:
+        """Construct and return the circuit.
+
+        Returns:
+            A :class:`~sparc.circuit.Circuit` with randomly initialized
+            parameters following the region graph structure.
+        """
         factory = _NodeFactory()
         region_cache: Dict = {}
         children = []
@@ -108,7 +129,24 @@ class RegionEmbeddingBuilder:
 
 
 class EmbeddingBuilder:
-    """Build a random PC over ``num_vars`` with node reuse."""
+    """Build a random PC over ``num_vars`` variables with optional node reuse.
+
+    Recursively partitions the scope into ``prod_arity`` sub-scopes at product
+    nodes and mixes ``sum_arity`` children at sum nodes. Cached nodes may be
+    reused according to the configured probabilities.
+
+    Args:
+        num_vars: Number of observed variables.
+        num_categories: Leaf cardinality (categorical or binomial support size).
+        sum_arity: Number of children per sum node.
+        prod_arity: Number of sub-scopes per product partition.
+        sum_concentration: Dirichlet concentration for sum-node weights.
+        sum_reuse_probability: Probability of reusing a cached sum subtree.
+        prod_reuse_probability: Probability of reusing a cached product subtree.
+        input_distribution: ``"categorical"`` or ``"binomial"``.
+        alpha: Dirichlet concentration for categorical leaves.
+        scope_offset: Added to every leaf variable index.
+    """
 
     def __init__(
         self,
@@ -147,6 +185,13 @@ class EmbeddingBuilder:
         self.scope_offset = scope_offset
 
     def build(self) -> Circuit:
+        """Construct and return the circuit.
+
+        Returns:
+            A :class:`~sparc.circuit.Circuit` with randomly initialized
+            parameters over variables
+            ``scope_offset .. scope_offset + num_vars - 1``.
+        """
         factory = _NodeFactory()
         scope = frozenset(range(self.scope_offset, self.scope_offset + self.num_vars))
         root = self._build(scope, {}, {}, {}, factory)

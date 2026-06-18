@@ -218,6 +218,14 @@ cdef class InternalNode(CircuitNode):
 
 
 cdef class SumNode(InternalNode):
+    """Mixture node: weighted sum over child sub-circuits.
+
+    Args:
+        id: Unique node identifier.
+        children: List of child :class:`CircuitNode` instances.
+        parameters: Non-negative mixture weights summing to 1.
+    """
+
     def __init__(self, size_t id, object children, object parameters):
         CircuitNode.__init__(self, id)
         self.node_kind = NODE_SUM
@@ -259,6 +267,14 @@ cdef class SumNode(InternalNode):
 
 
 cdef class ProductNode(InternalNode):
+    """Factorization node: product over child sub-circuits with disjoint scopes.
+
+    Args:
+        id: Unique node identifier.
+        children: List of child :class:`CircuitNode` instances with pairwise
+            disjoint scopes.
+    """
+
     def __init__(self, size_t id, object children):
         CircuitNode.__init__(self, id)
         self.node_kind = NODE_PRODUCT
@@ -343,6 +359,14 @@ cdef class FiniteDiscreteInputNode(InputNode):
 
 
 cdef class CategoricalInputNode(FiniteDiscreteInputNode):
+    """Categorical leaf over a single variable.
+
+    Args:
+        id: Unique node identifier.
+        scope_var: Variable index (non-negative integer).
+        probabilities: PMF over at least two outcomes, summing to 1.
+    """
+
     def __init__(self, size_t id, int scope_var, object probabilities):
         if scope_var < 0:
             raise ValueError(f"scope_var must be non-negative, got {scope_var}")

@@ -15,6 +15,15 @@ def _scope_subset_key(subset: FrozenSet[int]) -> Tuple[int, ...]:
 
 
 class Region:
+    """A region in a hierarchical region graph.
+
+    A region covers a set of variable indices and is decomposed into one or
+    more :class:`Partition` objects when it contains more than one variable.
+
+    Args:
+        scope: Iterable of variable indices covered by this region.
+    """
+
     def __init__(self, scope):
         self.scope = frozenset(scope)
         self.partitions = []
@@ -24,6 +33,12 @@ class Region:
 
 
 class Partition:
+    """One admissible decomposition of a region into sub-regions.
+
+    Args:
+        sub_regions: Child regions whose scopes partition the parent scope.
+    """
+
     def __init__(self, sub_regions: Iterable["Region"]):
         # Deterministic order across runs for a fixed RNG seed.
         self.sub_regions: Tuple[Region, ...] = tuple(
@@ -35,6 +50,18 @@ class Partition:
 
 
 class RandomRegionGraph:
+    """Generate a random hierarchical region graph over a variable scope.
+
+    Recursively partitions each multi-variable region into ``partitions_per_region``
+    random partitions, each with ``sub_regions_per_partition`` sub-regions,
+    until regions contain a single variable.
+
+    Args:
+        starting_scope: Full set of variable indices at the root.
+        partitions_per_region: Number of alternative partitions per region.
+        sub_regions_per_partition: Branching factor of each partition.
+    """
+
     def __init__(
         self,
         starting_scope: FrozenSet[int],
@@ -52,7 +79,15 @@ class RandomRegionGraph:
         self.sub_regions_per_partition = sub_regions_per_partition
         self.region_cache = {}
 
-    def generate(self, scope: FrozenSet[int]):
+    def generate(self, scope: FrozenSet[int]) -> Region:
+        """Build (or retrieve cached) the region graph rooted at ``scope``.
+
+        Args:
+            scope: Variable indices for the root region.
+
+        Returns:
+            A :class:`Region` whose ``partitions`` tree covers ``scope``.
+        """
         if scope in self.region_cache:
             return self.region_cache[scope]
         root = Region(scope)

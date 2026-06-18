@@ -125,10 +125,23 @@ def _instantiate(kind: str, *, node_id: int, children, scope, params) -> Circuit
 
 
 class CircuitSerializer:
-    """Save and load a single-root circuit as UTF-8 JSON."""
+    """Save and load a single-root circuit as UTF-8 JSON.
+
+    On disk, circuits use the ``gcw-circuit-v1`` format. Shared children in
+    the in-memory DAG are deduplicated by object identity during serialization.
+    """
 
     @staticmethod
     def dumps(root: object, *, indent: Optional[int] = 2) -> str:
+        """Serialize a circuit root to a JSON string.
+
+        Args:
+            root: :class:`~sparc.circuit.Circuit` or :class:`~sparc.nodes.CircuitNode`.
+            indent: JSON indentation level, or ``None`` for compact output.
+
+        Returns:
+            UTF-8 JSON string in ``gcw-circuit-v1`` format.
+        """
         root_node = _unwrap_root(root)
         nodes, root_idx, pyid_to_idx = _collect_postorder(root_node)
         payload = {
@@ -141,6 +154,18 @@ class CircuitSerializer:
 
     @staticmethod
     def loads(text: str, *, device: Any = None) -> CircuitNode:
+        """Deserialize a circuit root from a JSON string.
+
+        Args:
+            text: UTF-8 JSON in ``gcw-circuit-v1`` format.
+            device: Ignored; kept for API compatibility.
+
+        Returns:
+            Root :class:`~sparc.nodes.CircuitNode` with scope propagated.
+
+        Raises:
+            ValueError: If the format, node ids, or node records are invalid.
+        """
         del device  # kept for call-site compatibility
         data = json.loads(text)
         if data.get("format") != _FORMAT:
@@ -215,8 +240,26 @@ class CircuitSerializer:
 
     @staticmethod
     def save(root: object, path: Union[str, Path], *, indent: int = 2, encoding: str = "utf-8") -> None:
+        """Write a circuit to a JSON file.
+
+        Args:
+            root: :class:`~sparc.circuit.Circuit` or :class:`~sparc.nodes.CircuitNode`.
+            path: Output file path.
+            indent: JSON indentation level.
+            encoding: File encoding.
+        """
         Path(path).write_text(CircuitSerializer.dumps(root, indent=indent), encoding=encoding)
 
     @staticmethod
     def load(path: Union[str, Path], *, device: Any = None, encoding: str = "utf-8") -> CircuitNode:
+        """Load a circuit root from a JSON file.
+
+        Args:
+            path: Input file path.
+            device: Ignored; kept for API compatibility.
+            encoding: File encoding.
+
+        Returns:
+            Root :class:`~sparc.nodes.CircuitNode`.
+        """
         return CircuitSerializer.loads(Path(path).read_text(encoding=encoding), device=device)

@@ -33,18 +33,14 @@ cdef double NEG_INF = float("-inf")
 
 
 cdef class GradBundle:
-    """Gradient container.
+    """Gradient container returned by query and likelihood routines.
 
-    Attributes
-    ----------
-    value : float
-        The scalar objective value.
-    sum_grads : dict[int, numpy.ndarray]
-        ``SumNode.id`` -> gradient w.r.t. that node's ``parameters``.
-    cat_grads : dict[int, numpy.ndarray]
-        ``CategoricalInputNode.id`` -> gradient w.r.t. its ``probabilities``.
+    Attributes:
+        value: Scalar objective value (mean log-likelihood or query value).
+        sum_grads: ``SumNode.id`` -> gradient w.r.t. that node's parameters.
+        cat_grads: Leaf ``id`` -> gradient w.r.t. leaf probabilities.
 
-    Gradients are w.r.t. the linear parameters (no simplex projection); project
+    Gradients are w.r.t. linear parameters (no simplex projection). Project
     onto the simplex tangent before stepping (see :mod:`sparc.optim`).
     """
 
@@ -433,16 +429,13 @@ cdef tuple _flat_solve_dataset(CompiledGraph g, list dataset):
 def mean_log_likelihood_and_grad(CircuitNode root, object dataset):
     """Mean log-likelihood of a dataset and its gradient w.r.t. circuit params.
 
-    Parameters
-    ----------
-    root : CircuitNode
-        Circuit root with propagated scope.
-    dataset : iterable of dict[int, int]
-        Each datapoint is a full ``{var: value}`` assignment over the scope.
+    Args:
+        root: Circuit root with propagated scope.
+        dataset: Iterable of ``{var: value}`` dicts, one per datapoint.
 
-    Returns
-    -------
-    (mean_ll, grads) : tuple[float, GradBundle]
+    Returns:
+        ``(mean_ll, grads)`` where ``mean_ll`` is the average log-likelihood
+        and ``grads`` is a :class:`GradBundle`.
     """
     cdef list data = list(dataset)
     if root.scope.size() == 0:

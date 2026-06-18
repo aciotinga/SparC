@@ -67,12 +67,24 @@ def simplex_step(
     method: str = "tangent",
     prob_floor: float = PROB_FLOOR,
 ) -> List[float]:
-    """One projected-gradient step keeping ``params`` on the simplex.
+    """One projected-gradient step keeping ``params`` on the probability simplex.
 
-    ``ascent=True`` moves along ``+grad`` (maximize), ``False`` along ``-grad``
-    (minimize). ``method`` is ``"tangent"`` (project the gradient onto the
-    simplex tangent, step, clip + renormalize) or ``"euclidean"`` (step then
-    exact projection onto the simplex).
+    Args:
+        params: Current probability vector (must sum to 1).
+        grad: Gradient direction.
+        lr: Step size.
+        ascent: If ``True``, move along ``+grad`` (maximize); otherwise
+            along ``-grad`` (minimize).
+        method: ``"tangent"`` projects the gradient onto the simplex tangent,
+            steps, then clips and renormalizes; ``"euclidean"`` steps then
+            applies exact Euclidean projection onto the simplex.
+        prob_floor: Minimum probability mass per entry after projection.
+
+    Returns:
+        Updated probability vector on the simplex.
+
+    Raises:
+        ValueError: If ``method`` is not ``"tangent"`` or ``"euclidean"``.
     """
     p = np.asarray(params, dtype=np.float64)
     g = np.asarray(grad, dtype=np.float64)
@@ -105,7 +117,15 @@ def apply_grads(
 ) -> None:
     """Apply one :func:`simplex_step` to every sum / categorical node in place.
 
-    Only nodes whose ``id`` appears in the gradient dicts are touched.
+    Only nodes whose ``id`` appears in the gradient dicts are updated.
+
+    Args:
+        circuit: :class:`~sparc.circuit.Circuit` or root :class:`~sparc.nodes.CircuitNode`.
+        grads: :class:`~sparc.grad.GradBundle` or ``(sum_grads, cat_grads)`` tuple.
+        lr: Step size passed to :func:`simplex_step`.
+        ascent: If ``True``, ascend along the gradient; otherwise descend.
+        method: Simplex projection method (``"tangent"`` or ``"euclidean"``).
+        prob_floor: Minimum probability per entry after projection.
     """
     root = circuit.root if isinstance(circuit, Circuit) else circuit
     sum_grads, cat_grads = _grad_dicts(grads)
@@ -142,16 +162,16 @@ def global_grad_norm(grads: GradLike) -> float:
 
 
 class MLETrainer:
-    """Maximum-likelihood trainer: projected gradient ascent on mean log-likelihood.
+    """Maximum-likelihood trainer via projected gradient ascent.
 
-    Parameters
-    ----------
-    circuit:
-        The circuit whose parameters are optimized in place.
-    lr:
-        Learning rate.
-    method:
-        Simplex projection method (``"tangent"`` or ``"euclidean"``).
+    Optimizes sum-node weights and categorical/Bernoulli leaf parameters in
+    place using :func:`apply_grads` on the mean log-likelihood gradient.
+
+    Args:
+        circuit: Circuit whose parameters are optimized in place.
+        lr: Learning rate for each projected gradient step.
+        method: Simplex projection method (``"tangent"`` or ``"euclidean"``).
+        prob_floor: Minimum probability per entry after each step.
     """
 
     def __init__(
@@ -168,7 +188,14 @@ class MLETrainer:
         self.prob_floor = prob_floor
 
     def step(self, dataset: Iterable[Dict[int, int]]) -> float:
-        """One ascent step over ``dataset``; returns the mean log-likelihood."""
+        """Run one ascent step over ``dataset``.
+
+        Args:
+            dataset: Iterable of ``{var: value}`` assignment dicts.
+
+        Returns:
+            Mean log-likelihood before the parameter update.
+        """
         mean_ll, grads = self.circuit.mean_log_likelihood_and_grad(list(dataset))
         apply_grads(
             self.circuit, grads, self.lr,
@@ -183,7 +210,17 @@ class MLETrainer:
         epochs: int = 100,
         callback=None,
     ) -> List[float]:
-        """Run ``epochs`` ascent steps; returns the mean-LL history (pre-step)."""
+        """Run ``epochs`` projected gradient ascent steps.
+
+        Args:
+            dataset: Iterable of ``{var: value}`` assignment dicts.
+            epochs: Number of optimization steps.
+            callback: Optional ``callback(epoch, mean_ll)`` invoked after each
+                step with the pre-update mean log-likelihood.
+
+        Returns:
+            List of mean log-likelihoods recorded before each step.
+        """
         data = list(dataset)
         history: List[float] = []
         for epoch in range(epochs):

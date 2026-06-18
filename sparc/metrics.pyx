@@ -26,7 +26,12 @@ cdef class GroundMetric:
 
 
 cdef class PNormMetric(GroundMetric):
-    """``d(i, j) = |i - j|**p / scale`` on the integer line."""
+    r"""Ground metric :math:`d(i, j) = |i - j|^p / \mathrm{scale}` on the integer line.
+
+    Args:
+        p: Exponent in the distance (typically ``1.0`` or ``2.0``).
+        scale: Positive scale divisor applied to every cost.
+    """
 
     def __init__(self, double p=1.0, double scale=1.0):
         if scale <= 0.0:

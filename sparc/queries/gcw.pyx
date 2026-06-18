@@ -1777,7 +1777,20 @@ cpdef double gcw_crossterm(
     object metric1=None,
     object metric2=None,
 ) except *:
-    """Compute the GCW cross-term between two probabilistic circuits."""
+    """Compute the Gromov-Circuit-Wasserstein cross-term between two PCs.
+
+    Args:
+        circuit1: First circuit (:class:`~sparc.circuit.Circuit` or root node).
+        circuit2: Second circuit.
+        metric_p: Exponent for default per-side :class:`PNormMetric` instances.
+        scale_factor_1: Scale for the metric on ``circuit1`` leaves.
+        scale_factor_2: Scale for the metric on ``circuit2`` leaves.
+        metric1: Optional ground metric for ``circuit1``.
+        metric2: Optional ground metric for ``circuit2``.
+
+    Returns:
+        The GCW cross-term scalar value.
+    """
     cdef CircuitNode r1 = _unwrap(circuit1)
     cdef CircuitNode r2 = _unwrap(circuit2)
     cdef GCWContext ctx = GCWContext()
@@ -1828,10 +1841,20 @@ cpdef tuple gcw_crossterm_and_grad(
     object metric1=None,
     object metric2=None,
 ):
-    """Compute the GCW cross-term and its subgradients w.r.t. ``circuit2``.
+    """Compute the GCW cross-term and subgradients w.r.t. ``circuit2``.
 
-    Returns ``(value, grads)`` with ``grads`` a :class:`~sparc.grad.GradBundle`
-    over ``circuit2`` nodes.
+    Args:
+        circuit1: First circuit (:class:`~sparc.circuit.Circuit` or root node).
+        circuit2: Second circuit (receives gradients).
+        metric_p: Exponent for default per-side metrics.
+        scale_factor_1: Scale for the metric on ``circuit1`` leaves.
+        scale_factor_2: Scale for the metric on ``circuit2`` leaves.
+        metric1: Optional ground metric for ``circuit1``.
+        metric2: Optional ground metric for ``circuit2``.
+
+    Returns:
+        ``(value, grads)`` where ``grads`` is a :class:`~sparc.grad.GradBundle`
+        over ``circuit2`` nodes.
     """
     cdef CircuitNode r1 = _unwrap(circuit1)
     cdef CircuitNode r2 = _unwrap(circuit2)
