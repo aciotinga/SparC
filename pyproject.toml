@@ -22,7 +22,6 @@ dependencies = [
 
 [project.optional-dependencies]
 gurobi = ["gurobipy>=11.0"]
-pyjuice = ["pyjuice", "torch"]
 dev = ["pytest>=7.0"]
 
 [tool.setuptools.packages.find]
@@ -36,5 +35,4 @@ include = ["sparc*"]
 testpaths = ["tests"]
 markers = [
     "gurobi: requires gurobipy and a valid Gurobi license",
-    "pyjuice: requires pyjuice and torch",
 ]

@@ -10,12 +10,3 @@ __all__ = [
     "Region",
     "Partition",
 ]
-
-
-def __getattr__(name):
-    # PyjuiceBuilder pulled in lazily; importing it does not require pyjuice itself.
-    if name == "PyjuiceBuilder":
-        from sparc.builders.pyjuice import PyjuiceBuilder
-
-        return PyjuiceBuilder
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import tempfile
 from pathlib import Path
 
@@ -157,32 +156,3 @@ def test_multi_var_categorical_rejected_on_load():
 
     with pytest.raises(ValueError, match="single-variable"):
         CircuitSerializer.loads(json.dumps(payload))
-
-
-@pytest.mark.pyjuice
-def test_pyjuice_roundtrip_likelihood():
-    from sparc.builders import PyjuiceBuilder
-
-    juice = pytest.importorskip("pyjuice", reason="pyjuice not installed")
-    torch = pytest.importorskip("torch", reason="torch not installed")
-
-    def _tiny_pc(device="cpu", num_vars=4, num_latents=2):
-        rng = np.random.RandomState(0)
-        data = torch.from_numpy(rng.randint(0, 3, size=(64, num_vars))).to(device)
-        ns = juice.structures.HCLT(data.float(), num_latents=num_latents)
-        return juice.compile(ns)
-
-    pc = _tiny_pc()
-    builder = PyjuiceBuilder(block_size=pc.root_ns.num_chs)
-    circuit = builder.build(pc)
-    assignment = {v: 0 for v in circuit.root.scope_as_list()}
-    ll_before = circuit.likelihood(assignment)
-
-    text = CircuitSerializer.dumps(circuit)
-    restored_root = CircuitSerializer.loads(text)
-    restored = Circuit(restored_root)
-    ll_after = restored.likelihood(assignment)
-
-    assert ll_before > 0.0
-    assert ll_after == pytest.approx(ll_before)
-    assert math.isfinite(restored.log_likelihood(assignment))

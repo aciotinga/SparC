@@ -14,7 +14,7 @@ tapes, OT-based circuit distances) and dropping the technical debt.
   added without editing existing files.
 - **Minimal deps**: `numpy` only at runtime. The optimal-transport and
   assignment problems are solved by built-in pure-Cython solvers — no SciPy,
-  no Gurobi. `gurobipy` and `pyjuice` are optional extras.
+  no Gurobi. `gurobipy` is an optional extra for solver cross-checks.
 
 ## Install
 
@@ -24,7 +24,6 @@ SparC ships Cython/C++17 extensions, so a C++ compiler is required.
 pip install -e .            # build extensions in place
 pip install -e ".[dev]"     # + pytest
 pip install -e ".[gurobi]"  # optional Gurobi acceleration
-pip install -e ".[pyjuice]" # optional PyJuice import support
 ```
 
 ## Quick start
@@ -105,7 +104,7 @@ sparc/
   metrics.pyx      # GroundMetric, PNormMetric
   solvers/         # transport (network simplex + duals), assignment (Hungarian), northwest
   queries/         # _engine + esd / expectation / cw / gcw
-  builders/        # region graphs, embedding builders, PyJuice import
+  builders/        # region graphs, embedding builders
   io/              # gcw-circuit-v1 JSON serializer, learned-PC loader
   optim.py         # simplex_step, apply_grads, MLETrainer
   circuit.py       # high-level Circuit wrapper (+ clone)
