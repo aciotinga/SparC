@@ -22,7 +22,7 @@ def make_circuit(seed):
     np.random.seed(seed)
     random.seed(seed)
     return EmbeddingBuilder(
-        num_vars=100, num_categories=3, sum_arity=2, prod_arity=2,
+        num_vars=50, num_categories=3, sum_arity=2, prod_arity=2,
         sum_concentration=1.0, sum_reuse_probability=0.0,
         prod_reuse_probability=0.0, input_distribution="categorical", alpha=1.0,
     ).build()
@@ -45,7 +45,7 @@ def main():
     for step in range(1, args.steps + 1):
         val, grad2 = gcw_crossterm_and_grad(circuit1, circuit2)
         apply_grads(circuit2, grad2, lr=args.lr, ascent=ascent)
-        if step % 5 == 0:
+        if step % 1 == 0:
             print(f"  step {step:4d}: GCW = {val:.8f}")
 
     final = gcw_crossterm(circuit1, circuit2)

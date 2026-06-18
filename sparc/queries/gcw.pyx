@@ -44,6 +44,13 @@ from sparc.solvers.northwest cimport (
 from sparc.solvers.transport cimport transport_with_duals
 
 
+cdef struct LeafInfo:
+    vector[double] pmf
+    vector[double]* dist
+    size_t n
+    int scope
+
+
 cdef CircuitNode _unwrap(object circuit):
     from sparc.circuit import Circuit
     if isinstance(circuit, Circuit):
@@ -320,12 +327,18 @@ cdef class GCWContext(CoupleContext):
     cdef unordered_map[size_t, double] d_1
     cdef unordered_map[size_t, double] d_2
     cdef unordered_map[size_t, double] ed_adj_2
+    cdef unordered_map[size_t, LeafInfo] leaf_cache
+    cdef unordered_map[uint64_t, double] gcw_memo
+    cdef unordered_map[uint64_t, size_t] gcw_tape_idx
+    cdef vector[int] _lf_rows
+    cdef vector[int] _lf_cols
+    cdef vector[double] _lf_vals
+    cdef vector[int] _lf_modes
     cdef list d_2_order
     cdef int _mat_next
     cdef int _mat_offset
     cdef dict _mat_memo
     cdef dict _mat_embed_memo
-
     def __cinit__(self):
         self.d_2_order = []
 
@@ -338,6 +351,24 @@ cdef class GCWContext(CoupleContext):
         if self.dist_cache1.find(key) == self.dist_cache1.end():
             self.metric1.pairwise(scope_var, n, self.dist_cache1[key])
         return &self.dist_cache1[key]
+
+    cdef LeafInfo* _get_leaf(self, FiniteDiscreteInputNode leaf, int side) except *:
+        """Per-leaf record (pmf + ground-distance pointer) computed once.
+
+        A leaf always appears on a fixed side within a single solve, so the
+        ground-distance pointer (which depends on side + support size) is stable
+        and can be cached alongside the pmf with a single hash lookup per pair.
+        """
+        cdef size_t nid = obj_id(leaf)
+        cdef unordered_map[size_t, LeafInfo].iterator it = self.leaf_cache.find(nid)
+        if it != self.leaf_cache.end():
+            return &deref(it).second
+        cdef LeafInfo* info = &self.leaf_cache[nid]
+        info.n = leaf.support_size()
+        info.scope = leaf.scope_var_c()
+        _leaf_pmf(leaf, info.pmf)
+        info.dist = self.get_dist(side, info.scope, info.n)
+        return info
 
     cdef double d_lookup(self, int side, CircuitNode node) except *:
         cdef size_t nid = obj_id(node)
@@ -396,15 +427,42 @@ cdef class GCWContext(CoupleContext):
             order.append(node)
         return total
 
+    cdef inline uint64_t _pair_key(self, CircuitNode P, CircuitNode Q, int sP, int sQ) noexcept:
+        # Pack the (side-0 node id, side-1 node id) pair into one 64-bit key.
+        if sP == 0:
+            return (<uint64_t>P.id << 32) | <uint64_t>Q.id
+        return (<uint64_t>Q.id << 32) | <uint64_t>P.id
+
+    cdef size_t _gcw_append_tape(self, TapeEntry entry, CircuitNode P, CircuitNode Q,
+                                 int sP, int sQ) except *:
+        cdef size_t idx = <size_t>len(self.tape)
+        self.tape.append(entry)
+        self.tape_adjoints.push_back(0.0)
+        self.gcw_tape_idx[self._pair_key(P, Q, sP, sQ)] = idx
+        return idx
+
+    cdef size_t _gcw_idx_of(self, CircuitNode P, CircuitNode Q, int sP, int sQ) noexcept:
+        cdef unordered_map[uint64_t, size_t].iterator it = self.gcw_tape_idx.find(
+            self._pair_key(P, Q, sP, sQ))
+        if it == self.gcw_tape_idx.end():
+            return NO_TAPE_IDX
+        return deref(it).second
+
     cdef double couple_value(self, CircuitNode P, CircuitNode Q, int sP, int sQ) except *:
-        cdef double cached
         cdef double res
         cdef int pk
         cdef int qk
         cdef ProductNode Pp
         cdef ProductNode Qp
-        if self.memo_get(P, Q, &cached):
-            return cached
+        # GCW-local memo. Every coupled pair has exactly one node from circuit 1
+        # (side 0) and one from circuit 2 (side 1); each circuit assigns dense
+        # ``id``s (< 2**32 in practice), so the ordered pair packs losslessly
+        # into a single 64-bit key. A flat integer-keyed map is far cheaper than
+        # the base class's nested pointer-keyed maps (better hashing + locality).
+        cdef uint64_t key = self._pair_key(P, Q, sP, sQ)
+        cdef unordered_map[uint64_t, double].iterator iit = self.gcw_memo.find(key)
+        if iit != self.gcw_memo.end():
+            return deref(iit).second
         pk = P.node_kind
         qk = Q.node_kind
         if pk == NODE_INPUT and qk == NODE_INPUT:
@@ -432,27 +490,18 @@ cdef class GCWContext(CoupleContext):
             res = self._prod_other(<ProductNode>P, Q, sP, sQ)
         else:
             raise NotImplementedError("GCW coupling not implemented for this pair")
-        self.memo_put(P, Q, res)
+        self.gcw_memo[key] = res
         return res
 
     cdef double _leaf(self, FiniteDiscreteInputNode P, FiniteDiscreteInputNode Q, int sP, int sQ) except *:
-        cdef size_t n = P.support_size()
-        cdef size_t m = Q.support_size()
-        cdef int p_scope = P.scope_var_c()
-        cdef int q_scope = Q.scope_var_c()
-        cdef vector[double]* d_p = self.get_dist(sP, p_scope, n)
-        cdef vector[double]* d_q = self.get_dist(sQ, q_scope, m)
-        cdef vector[double] p_pmf
-        cdef vector[double] q_pmf
-        cdef vector[int] rows
-        cdef vector[int] cols
-        cdef vector[double] vals
-        cdef vector[int] modes
+        cdef LeafInfo* ip = self._get_leaf(P, sP)
+        cdef LeafInfo* iq = self._get_leaf(Q, sQ)
+        cdef size_t n = ip.n
+        cdef size_t m = iq.n
         cdef double value
         cdef _GCWLeaf entry
-        _leaf_pmf(P, p_pmf)
-        _leaf_pmf(Q, q_pmf)
-        value = nw_run(p_pmf, q_pmf, deref(d_p), deref(d_q), n, m, rows, cols, vals, modes)
+        value = nw_run(ip.pmf, iq.pmf, deref(ip.dist), deref(iq.dist), n, m,
+                       self._lf_rows, self._lf_cols, self._lf_vals, self._lf_modes)
         if self.recording:
             entry = _GCWLeaf()
             entry.side_P = sP
@@ -461,13 +510,13 @@ cdef class GCWContext(CoupleContext):
             entry.Q = Q
             entry.n = n
             entry.m = m
-            entry.p_scope = p_scope
-            entry.q_scope = q_scope
-            entry.rows = rows
-            entry.cols = cols
-            entry.vals = vals
-            entry.modes = modes
-            self.append_tape(entry, P, Q)
+            entry.p_scope = ip.scope
+            entry.q_scope = iq.scope
+            entry.rows = self._lf_rows
+            entry.cols = self._lf_cols
+            entry.vals = self._lf_vals
+            entry.modes = self._lf_modes
+            self._gcw_append_tape(entry, P, Q, sP, sQ)
         return value
 
     cdef double _sum_sum(self, SumNode P, SumNode Q, int sP, int sQ) except *:
@@ -497,7 +546,7 @@ cdef class GCWContext(CoupleContext):
                 qc = Q.child_at(j)
                 V[i * m + j] = self.couple_value(pc, qc, sP, sQ)
                 if self.recording:
-                    child_idx[i * m + j] = self.lookup_pair_tape_idx(pc, qc)
+                    child_idx[i * m + j] = self._gcw_idx_of(pc, qc, sP, sQ)
         cost.resize(n * m)
         for i in range(n):
             for j in range(m):
@@ -526,7 +575,7 @@ cdef class GCWContext(CoupleContext):
             entry.pi = u
             entry.rho = v
             entry.child_idx = child_idx
-            self.append_tape(entry, P, Q)
+            self._gcw_append_tape(entry, P, Q, sP, sQ)
         return cross_term
 
     cdef double _prod_prod(self, ProductNode P, ProductNode Q, int sP, int sQ) except *:
@@ -576,7 +625,7 @@ cdef class GCWContext(CoupleContext):
                 cost[i * m + j] = ed_val - c_cost  # minimize -> maximize pairwise
                 base_cost += ed_val
                 if self.recording:
-                    child_idx[i * m + j] = self.lookup_pair_tape_idx(pc, qc)
+                    child_idx[i * m + j] = self._gcw_idx_of(pc, qc, sP, sQ)
         assignment_min(cost, n, m, row_ind, col_ind)
         gw_cost = base_cost
         num = row_ind.size()
@@ -597,7 +646,7 @@ cdef class GCWContext(CoupleContext):
             entry.row_ind = row_ind
             entry.col_ind = col_ind
             entry.child_idx = child_idx
-            self.append_tape(entry, P, Q)
+            self._gcw_append_tape(entry, P, Q, sP, sQ)
         return gw_cost
 
     cdef double _sum_other(self, SumNode P, CircuitNode Q, int sP, int sQ) except *:
@@ -621,7 +670,7 @@ cdef class GCWContext(CoupleContext):
             theta[i] = P.parameter_at(i)
             total += theta[i] * v_i
             if self.recording:
-                child_idx[i] = self.lookup_pair_tape_idx(pc, Q)
+                child_idx[i] = self._gcw_idx_of(pc, Q, sP, sQ)
         if self.recording:
             entry = _GCWSumOther()
             entry.side_P = sP
@@ -632,7 +681,7 @@ cdef class GCWContext(CoupleContext):
             entry.theta = theta
             entry.V = V
             entry.child_idx = child_idx
-            self.append_tape(entry, P, Q)
+            self._gcw_append_tape(entry, P, Q, sP, sQ)
         return total
 
     cdef double _prod_other(self, ProductNode P, CircuitNode Q, int sP, int sQ) except *:
@@ -657,7 +706,7 @@ cdef class GCWContext(CoupleContext):
             V[i] = self.couple_value(pc, Q, sP, sQ)
             d_p[i] = self.d_lookup(sP, pc)
             if self.recording:
-                child_idx[i] = self.lookup_pair_tape_idx(pc, Q)
+                child_idx[i] = self._gcw_idx_of(pc, Q, sP, sQ)
         for i in range(nc):
             adjusted = V[i] - d_p[i] * d_q
             if adjusted > best_val:
@@ -678,7 +727,7 @@ cdef class GCWContext(CoupleContext):
             entry.d_q = d_q
             entry.best_idx = best_idx
             entry.child_idx = child_idx
-            self.append_tape(entry, P, Q)
+            self._gcw_append_tape(entry, P, Q, sP, sQ)
         return total_cost
 
     cdef double _max_sum_prod(self, SumNode P_sum, ProductNode Q_prod, int sP_sum, int sQ_prod) except *:
@@ -713,7 +762,7 @@ cdef class GCWContext(CoupleContext):
             so_theta[i] = P_sum.parameter_at(i)
             res1 += so_theta[i] * v_i
             if self.recording:
-                so_idx[i] = self.lookup_pair_tape_idx(sum_child, Q_prod)
+                so_idx[i] = self._gcw_idx_of(sum_child, Q_prod, sP_sum, sQ_prod)
         po_V.resize(nc_prod)
         po_d_p.resize(nc_prod)
         if self.recording:
@@ -724,7 +773,7 @@ cdef class GCWContext(CoupleContext):
             po_V[i] = self.couple_value(prod_child, P_sum, sQ_prod, sP_sum)
             po_d_p[i] = self.d_lookup(sQ_prod, prod_child)
             if self.recording:
-                po_idx[i] = self.lookup_pair_tape_idx(prod_child, P_sum)
+                po_idx[i] = self._gcw_idx_of(prod_child, P_sum, sQ_prod, sP_sum)
         for i in range(nc_prod):
             adjusted = po_V[i] - po_d_p[i] * d_q_sum
             if adjusted > best_val:
@@ -755,7 +804,7 @@ cdef class GCWContext(CoupleContext):
             entry.po_d_q = d_q_sum
             entry.po_best_idx = best_idx
             entry.po_child_idx = po_idx
-            self.append_tape(entry, P_sum, Q_prod)
+            self._gcw_append_tape(entry, P_sum, Q_prod, sP_sum, sQ_prod)
         return res1 if res1 >= res2 else res2
 
     cdef void _ed_backward(self) except *:
@@ -823,13 +872,33 @@ cdef class GCWContext(CoupleContext):
         self.dist_cache0.clear()
         self.dist_cache1.clear()
         self.ed_adj_2.clear()
+        self.leaf_cache.clear()
+        self.gcw_memo.clear()
+        self.gcw_tape_idx.clear()
         self.d_2_order = []
 
     cdef double solve(self, CircuitNode c1, CircuitNode c2) except *:
         self.reset_gcw()
         self._ed_node(c1, 0, &self.d_1, None)
         self._ed_node(c2, 1, &self.d_2, self.d_2_order)
+        self._reserve_memo()
         return self.couple_value(c1, c2, 0, 1)
+
+    cdef void _reserve_memo(self) except *:
+        # Pre-size the pair memo to avoid repeated rehashing as it grows to
+        # ~|nodes(c1)| x |nodes(c2)| entries. Capped to bound memory on very
+        # large circuits (the map still grows beyond the cap if needed).
+        cdef size_t n1 = self.d_1.size()
+        cdef size_t n2 = self.d_2.size()
+        cdef size_t want = n1 * n2
+        cdef size_t cap = 8000000
+        if want > cap:
+            want = cap
+        if want > 0:
+            self.gcw_memo.reserve(want)
+            if self.recording:
+                self.gcw_tape_idx.reserve(want)
+                self.tape_adjoints.reserve(want)
 
     # === Coupling-circuit materialization ====================================
     # Builds a PC over vars(c1) U (vars(c2) + offset) whose ancestral sampling
@@ -1183,7 +1252,7 @@ cpdef tuple gcw_crossterm_and_grad(
     ctx.recording = True
     try:
         value = ctx.solve(r1, r2)
-        root_idx = ctx.lookup_pair_tape_idx(r1, r2)
+        root_idx = ctx._gcw_idx_of(r1, r2, 0, 1)
         if root_idx == NO_TAPE_IDX:
             raise RuntimeError("internal: root pair has no tape entry")
         ctx.tape_adjoints[root_idx] = 1.0
