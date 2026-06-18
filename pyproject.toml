@@ -22,7 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gurobi = ["gurobipy>=11.0"]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "pytest-randomly>=3.15", "scipy>=1.7"]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -35,4 +35,18 @@ include = ["sparc*"]
 testpaths = ["tests"]
 markers = [
     "gurobi: requires gurobipy and a valid Gurobi license",
+    "gcw: GCW coupling / materialization tests (order- and platform-sensitive)",
+    "gcw_stress: heap/order stress tests for GCW memoization isolation",
+    "solver: direct unit tests for OT / assignment solvers",
+    "metrics: ground metric and metric-driven query behavior",
+    "eval: likelihood, sampling, and compiled batched evaluation",
+    "optim: simplex_step, apply_grads, MLETrainer",
+    "circuit: Circuit wrapper (clone, save/load, normalization)",
+    "queries: CW / GCW / exp / log_exp query behavior",
+    "integration: cross-module leaf-type integration tests",
+    "property: cross-cutting invariants (normalization, determinism)",
+    "nodes: node construction and validation",
+]
+filterwarnings = [
+    "error::pytest.PytestUnraisableExceptionWarning",
 ]
