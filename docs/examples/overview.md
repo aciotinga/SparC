@@ -59,6 +59,15 @@ DRO-style robustification on pre-trained circuits in `examples/example_pcs/`.
 PYTHONPATH=. python examples/robustify.py
 ```
 
+## robustify_ogda
+
+Same DRO objective as `robustify`, but uses Optimistic Gradient Descent Ascent
+(OGDA) instead of a nested inner GDA loop.
+
+```bash
+PYTHONPATH=. python examples/robustify_ogda.py plants.json --dataset-k 3
+```
+
 ## structures
 
 Demonstrates all built-in structures and evaluates CW distance between pairs.

@@ -225,3 +225,27 @@ class TestDROSmoke:
 
         assert math.isfinite(log_exp_query(p_theta, q_phi))
         assert math.isfinite(cw_distance(p_hat, q_phi))
+
+    def test_sample_based_dro_theta_step_runs(self):
+        random.seed(0)
+        np.random.seed(0)
+        rg = RandomRegionGraph(
+            frozenset(range(5)), partitions_per_region=1, sub_regions_per_partition=2
+        )
+        region = rg.generate(frozenset(range(5)))
+        p_hat = RegionEmbeddingBuilder(
+            region, num_categories=3, block_size=2,
+            sum_concentration=1.0, input_distribution="categorical", alpha=1.0,
+        ).build()
+        p_theta = p_hat.clone()
+        q_phi = p_hat.clone()
+
+        for _ in range(3):
+            _, _, grad_phi = log_exp_query_and_grad(p_theta, q_phi)
+            apply_grads(q_phi, grad_phi, 1e-2, ascent=False)
+            q_samples = q_phi.sample(50, seed=0)
+            _, grad_theta = p_theta.mean_log_likelihood_and_grad(q_samples)
+            apply_grads(p_theta, grad_theta, 1e-2, ascent=True)
+
+        assert math.isfinite(log_exp_query(p_theta, q_phi))
+        assert math.isfinite(cw_distance(p_hat, q_phi))
