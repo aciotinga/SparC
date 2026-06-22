@@ -14,7 +14,7 @@ from libcpp.vector cimport vector
 
 import numpy as np
 
-from sparc._graph cimport CompiledGraph
+from sparc._graph cimport CompiledCircuit
 from sparc.grad cimport GradBundle, grad_arr
 from sparc.metrics cimport GroundMetric, PNormMetric
 from sparc.nodes cimport (
@@ -212,6 +212,11 @@ cdef class _ESDContext:
 
 cdef CircuitNode _unwrap(object circuit):
     from sparc.circuit import Circuit
+    if isinstance(circuit, CompiledCircuit):
+        raise TypeError(
+            "expected a Circuit or CircuitNode for object-graph queries; "
+            "pass a CompiledCircuit directly for the fast path"
+        )
     if isinstance(circuit, Circuit):
         return <CircuitNode>(<object>circuit).root
     if isinstance(circuit, CircuitNode):
@@ -222,7 +227,7 @@ cdef CircuitNode _unwrap(object circuit):
 # --- Flattened nogil fast path ------------------------------------------------
 
 cdef void _build_dist_pool(
-    CompiledGraph g, GroundMetric metric,
+    CompiledCircuit g, GroundMetric metric,
     vector[size_t]& dist_off, vector[double]& dist_flat,
 ) except *:
     """Precompute each leaf's ground-distance matrix into a flat pool (GIL)."""
@@ -251,7 +256,7 @@ cdef void _build_dist_pool(
 
 
 cdef void _flat_esd_forward(
-    CompiledGraph g, const size_t* dist_off, const double* dist_flat,
+    CompiledCircuit g, const size_t* dist_off, const double* dist_flat,
     double* mu, double* nu,
 ) noexcept nogil:
     cdef size_t n
@@ -319,7 +324,7 @@ cdef void _flat_esd_forward(
 
 
 cdef void _flat_esd_backward(
-    CompiledGraph g, const size_t* dist_off, const double* dist_flat,
+    CompiledCircuit g, const size_t* dist_off, const double* dist_flat,
     const double* mu, const double* nu,
     double* bar_mu, double* bar_nu,
     double* cat_pool, double* sum_pool,
@@ -392,7 +397,7 @@ cdef void _flat_esd_backward(
                 bar_nu[child] += anu
 
 
-cdef double _flat_esd_solve(CompiledGraph g, GroundMetric metric) except *:
+cdef double _flat_esd_solve(CompiledCircuit g, GroundMetric metric) except *:
     cdef vector[size_t] dist_off
     cdef vector[double] dist_flat
     _build_dist_pool(g, metric, dist_off, dist_flat)
@@ -405,7 +410,7 @@ cdef double _flat_esd_solve(CompiledGraph g, GroundMetric metric) except *:
     return nu[g.root_index]
 
 
-cdef tuple _flat_esd_solve_with_grad(CompiledGraph g, GroundMetric metric):
+cdef tuple _flat_esd_solve_with_grad(CompiledCircuit g, GroundMetric metric):
     cdef vector[size_t] dist_off
     cdef vector[double] dist_flat
     _build_dist_pool(g, metric, dist_off, dist_flat)
@@ -476,15 +481,16 @@ cpdef double expected_squared_distance(
     Returns:
         Expected squared-distance objective under the ground metric.
     """
-    cdef CircuitNode root = _unwrap(circuit)
-    cdef GroundMetric m = metric if metric is not None else PNormMetric(metric_p, scale_factor)
-    cdef CompiledGraph g = CompiledGraph()
-    g.build(root)
-    if g.has_fallback:
-        ctx = _ESDContext()
-        ctx.metric = m
-        return ctx.solve(root)
-    return _flat_esd_solve(g, m)
+    cdef GroundMetric m
+    cdef CircuitNode root
+    cdef _ESDContext ctx
+    m = metric if metric is not None else PNormMetric(metric_p, scale_factor)
+    if isinstance(circuit, CompiledCircuit):
+        return _flat_esd_solve(circuit, m)
+    root = _unwrap(circuit)
+    ctx = _ESDContext()
+    ctx.metric = m
+    return ctx.solve(root)
 
 
 cpdef tuple expected_squared_distance_and_grad(
@@ -504,12 +510,13 @@ cpdef tuple expected_squared_distance_and_grad(
     Returns:
         ``(value, grads)`` where ``grads`` is a :class:`~sparc.grad.GradBundle`.
     """
-    cdef CircuitNode root = _unwrap(circuit)
-    cdef GroundMetric m = metric if metric is not None else PNormMetric(metric_p, scale_factor)
-    cdef CompiledGraph g = CompiledGraph()
-    g.build(root)
-    if g.has_fallback:
-        ctx = _ESDContext()
-        ctx.metric = m
-        return ctx.solve_with_grad(root)
-    return _flat_esd_solve_with_grad(g, m)
+    cdef GroundMetric m
+    cdef CircuitNode root
+    cdef _ESDContext ctx
+    m = metric if metric is not None else PNormMetric(metric_p, scale_factor)
+    if isinstance(circuit, CompiledCircuit):
+        return _flat_esd_solve_with_grad(circuit, m)
+    root = _unwrap(circuit)
+    ctx = _ESDContext()
+    ctx.metric = m
+    return ctx.solve_with_grad(root)

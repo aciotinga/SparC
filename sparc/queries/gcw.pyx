@@ -19,7 +19,7 @@ from libcpp.vector cimport vector
 
 import numpy as np
 
-from sparc._graph cimport CompiledGraph
+from sparc._graph cimport CompiledCircuit
 from sparc.grad cimport GradBundle
 from sparc.metrics cimport GroundMetric, PNormMetric
 from sparc.nodes cimport (
@@ -56,11 +56,30 @@ cdef struct LeafInfo:
 
 cdef CircuitNode _unwrap(object circuit):
     from sparc.circuit import Circuit
+    if isinstance(circuit, CompiledCircuit):
+        raise TypeError(
+            "expected a Circuit or CircuitNode for object-graph queries; "
+            "use CompiledCircuit methods for the fast path"
+        )
     if isinstance(circuit, Circuit):
         return <CircuitNode>(<object>circuit).root
     if isinstance(circuit, CircuitNode):
         return <CircuitNode>circuit
     raise TypeError("expected a Circuit or CircuitNode")
+
+
+cdef CircuitNode _compiled_root(CompiledCircuit g):
+    return <CircuitNode>g.node_objs[g.root_index]
+
+
+cdef void _check_pair_types(object c1, object c2) except *:
+    cdef bint cc1 = isinstance(c1, CompiledCircuit)
+    cdef bint cc2 = isinstance(c2, CompiledCircuit)
+    if cc1 != cc2:
+        raise TypeError(
+            "pairwise queries require both operands to be the same kind: "
+            "either both Circuit/CircuitNode or both CompiledCircuit"
+        )
 
 
 cdef void _leaf_pmf(FiniteDiscreteInputNode leaf, vector[double]& out) except *:
@@ -321,6 +340,10 @@ cdef void _bw_prod_other(
 
 
 # === Flattened nogil tape + pools (gradients for circuit2 only) ===============
+# Metric distance pools are built at setup (GIL).  ED sweeps and tape/ED
+# backward replay run nogil.  Coupling tape entries are recorded under the GIL
+# (structural compatibility + asymmetric sum/prod cases); numeric ED forward
+# and gradient backward are nogil.
 
 cdef enum GCWEntryKind:
     GK_LEAF = 0
@@ -369,7 +392,7 @@ cdef struct GCWEntry:
 
 
 cdef void _gcw_build_dist(
-    CompiledGraph g, GroundMetric metric,
+    CompiledCircuit g, GroundMetric metric,
     vector[size_t]& dist_off, vector[double]& dist_flat,
 ) except *:
     cdef size_t n
@@ -686,8 +709,8 @@ cdef class GCWContext(CoupleContext):
     cdef dict _mat_embed_memo
     # --- flat nogil tape + pools (gradients for circuit2 / side 1 only) -------
     cdef bint flat_mode
-    cdef CompiledGraph g0
-    cdef CompiledGraph g1
+    cdef CompiledCircuit g0
+    cdef CompiledCircuit g1
     cdef unordered_map[size_t, size_t] pos0
     cdef unordered_map[size_t, size_t] pos1
     cdef vector[GCWEntry] etape
@@ -1388,8 +1411,8 @@ cdef class GCWContext(CoupleContext):
 
     # === Flattened nogil solve ===============================================
 
-    cdef tuple solve_flat(self, CircuitNode c1, CircuitNode c2, CompiledGraph g0,
-                          CompiledGraph g1):
+    cdef tuple solve_flat(self, CircuitNode c1, CircuitNode c2, CompiledCircuit g0,
+                          CompiledCircuit g1):
         cdef size_t pos
         self.g0 = g0
         self.g1 = g1
@@ -1446,6 +1469,30 @@ cdef class GCWContext(CoupleContext):
                              d1o, d1f, edval, edadj, cat1p, sum1p)
         self.flat_mode = False
         return self._materialize_grads(value)
+
+    cdef double solve_value_flat(self, CircuitNode c1, CircuitNode c2,
+                                 CompiledCircuit g0, CompiledCircuit g1):
+        cdef size_t pos
+        self.g0 = g0
+        self.g1 = g1
+        self.pos0.clear()
+        self.pos1.clear()
+        for pos in range(self.g0.n_nodes):
+            self.pos0[self.g0.node_ids[pos]] = pos
+        for pos in range(self.g1.n_nodes):
+            self.pos1[self.g1.node_ids[pos]] = pos
+        _gcw_build_dist(self.g0, self.metric0, self.dist0_off, self.dist0_flat)
+        _gcw_build_dist(self.g1, self.metric1, self.dist1_off, self.dist1_flat)
+        self.reset_gcw()
+        self.flat_mode = True
+        self.recording = True
+        self.etape.clear()
+        self._ed_node(c1, 0, &self.d_1, None)
+        self._ed_node(c2, 1, &self.d_2, self.d_2_order)
+        self._reserve_memo()
+        cdef double value = self.couple_value(c1, c2, 0, 1)
+        self.flat_mode = False
+        return value
 
     cdef tuple _materialize_grads(self, double value):
         cdef GradBundle grads = GradBundle()
@@ -1791,11 +1838,23 @@ cpdef double gcw_crossterm(
     Returns:
         The GCW cross-term scalar value.
     """
-    cdef CircuitNode r1 = _unwrap(circuit1)
-    cdef CircuitNode r2 = _unwrap(circuit2)
-    cdef GCWContext ctx = GCWContext()
+    cdef GCWContext ctx
+    cdef CompiledCircuit c1
+    cdef CompiledCircuit c2
+    cdef CircuitNode r1
+    cdef CircuitNode r2
+    _check_pair_types(circuit1, circuit2)
+    ctx = GCWContext()
     ctx.metric0 = metric1 if metric1 is not None else PNormMetric(metric_p, scale_factor_1)
     ctx.metric1 = metric2 if metric2 is not None else PNormMetric(metric_p, scale_factor_2)
+    if isinstance(circuit1, CompiledCircuit):
+        c1 = circuit1
+        c2 = circuit2
+        return ctx.solve_value_flat(
+            _compiled_root(c1), _compiled_root(c2), c1, c2
+        )
+    r1 = _unwrap(circuit1)
+    r2 = _unwrap(circuit2)
     return ctx.solve(r1, r2)
 
 
@@ -1856,29 +1915,26 @@ cpdef tuple gcw_crossterm_and_grad(
         ``(value, grads)`` where ``grads`` is a :class:`~sparc.grad.GradBundle`
         over ``circuit2`` nodes.
     """
-    cdef CircuitNode r1 = _unwrap(circuit1)
-    cdef CircuitNode r2 = _unwrap(circuit2)
-    cdef GCWContext ctx = GCWContext()
+    cdef GCWContext ctx
+    cdef CompiledCircuit c1
+    cdef CompiledCircuit c2
+    cdef CircuitNode r1
+    cdef CircuitNode r2
     cdef double value
     cdef size_t root_idx
     cdef GradBundle grads
-    cdef CompiledGraph g0
-    cdef CompiledGraph g1
+    _check_pair_types(circuit1, circuit2)
+    ctx = GCWContext()
     ctx.metric0 = metric1 if metric1 is not None else PNormMetric(metric_p, scale_factor_1)
     ctx.metric1 = metric2 if metric2 is not None else PNormMetric(metric_p, scale_factor_2)
-
-    # Fast path: when both circuits consist solely of recognized built-in leaves
-    # the whole solve (forward record + dual backward passes) runs nogil over
-    # flat C pools. Custom leaf subclasses force the object/vtable path below.
-    r1.propagate_scope()
-    r2.propagate_scope()
-    g0 = CompiledGraph()
-    g0.build(r1)
-    g1 = CompiledGraph()
-    g1.build(r2)
-    if not g0.has_fallback and not g1.has_fallback:
-        return ctx.solve_flat(r1, r2, g0, g1)
-
+    if isinstance(circuit1, CompiledCircuit):
+        c1 = circuit1
+        c2 = circuit2
+        return ctx.solve_flat(
+            _compiled_root(c1), _compiled_root(c2), c1, c2
+        )
+    r1 = _unwrap(circuit1)
+    r2 = _unwrap(circuit2)
     ctx.recording = True
     try:
         value = ctx.solve(r1, r2)

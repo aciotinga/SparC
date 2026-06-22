@@ -91,12 +91,6 @@ def circuit_path_to_dataset_name(path: Path) -> str:
     return stem
 
 
-def best_checkpoint_path(output: Path | None, circuit_path: Path) -> Path:
-    if output is not None:
-        return output.with_name(f"{output.stem}_best_ll_adv{output.suffix}")
-    return circuit_path.with_name(f"{circuit_path.stem}_best_ll_adv.json")
-
-
 def load_csv_data(path: Path) -> np.ndarray:
     return np.loadtxt(path, delimiter=",", dtype=np.int32)
 
@@ -114,7 +108,7 @@ def resolve_eval_datasets(dataset_name: str, dataset_k: int) -> tuple[np.ndarray
 
 
 def mean_log_likelihood(circuit: Circuit, rows: np.ndarray) -> float:
-    return float(circuit.batched_log_likelihood(rows).mean())
+    return float(circuit.compile().log_likelihood(rows).mean())
 
 
 def _samples_to_array(samples: list[dict[int, int]]) -> np.ndarray:
@@ -137,7 +131,7 @@ def sample_log_exp_p_query(
     """Monte Carlo estimate of log E_P[Q(X)]."""
     samples = p_theta.sample(num_samples, seed=seed)
     data = _samples_to_array(samples)
-    log_q = q_phi.batched_log_likelihood(data)
+    log_q = q_phi.compile().log_likelihood(data)
     mean_q = float(np.exp(log_q).mean())
     return float(np.log(max(mean_q, PROB_FLOOR)))
 
@@ -152,7 +146,7 @@ def sample_log_exp_p_query_and_grad(
     """Monte Carlo estimate of log E_P[Q(X)] and grad w.r.t. q_phi."""
     samples = p_theta.sample(num_samples, seed=seed)
     data = _samples_to_array(samples)
-    log_q = q_phi.batched_log_likelihood(data)
+    log_q = q_phi.compile().log_likelihood(data)
     q_vals = np.exp(log_q)
     mean_q = float(q_vals.mean())
     mean_q = max(mean_q, PROB_FLOOR)
@@ -325,7 +319,6 @@ def run_dro(
     original_data: np.ndarray | None = None,
     adversarial_data: np.ndarray | None = None,
     plotter: LiveLikelihoodPlot | None = None,
-    best_ckpt_path: Path | None = None,
 ):
     gcw_kw = dict(
         metric_p=metric_p,
@@ -337,9 +330,6 @@ def run_dro(
     q_phi = p_hat.clone()
     lam = 0.0
     do_eval = original_data is not None and adversarial_data is not None
-    track_best = do_eval and best_ckpt_path is not None
-    best_ll_adv = float("-inf")
-    best_iter = 0
 
     print(
         f"initial: log(E_P[Q])={sample_log_exp_p_query(p_theta, q_phi, num_samples=num_samples, seed=phi_seed):.6f}  "
@@ -347,21 +337,13 @@ def run_dro(
     )
 
     if do_eval:
-        _, adv_ll = _eval_and_report(
+        _eval_and_report(
             p_theta,
             0,
             original_data=original_data,
             adversarial_data=adversarial_data,
             plotter=plotter,
         )
-        if track_best:
-            best_ll_adv = adv_ll
-            best_iter = 0
-            p_theta.save(best_ckpt_path)
-            print(
-                f"  best LL_adv checkpoint: {best_ckpt_path}  "
-                f"(iter {best_iter}, LL_adv={best_ll_adv:.6f})"
-            )
 
     q_update_kw = dict(
         k=k,
@@ -406,27 +388,13 @@ def run_dro(
         )
 
         if do_eval and eval_every is not None and it % eval_every == 0:
-            _, adv_ll = _eval_and_report(
+            _eval_and_report(
                 p_theta,
                 it,
                 original_data=original_data,
                 adversarial_data=adversarial_data,
                 plotter=plotter,
             )
-            if track_best and adv_ll > best_ll_adv:
-                best_ll_adv = adv_ll
-                best_iter = it
-                p_theta.save(best_ckpt_path)
-                print(
-                    f"  new best LL_adv={best_ll_adv:.6f} at iter {best_iter}, "
-                    f"saved: {best_ckpt_path}"
-                )
-
-    if track_best:
-        print(
-            f"  best LL_adv={best_ll_adv:.6f} at iter {best_iter}  "
-            f"checkpoint: {best_ckpt_path}"
-        )
 
     return p_theta, lam
 
@@ -453,7 +421,7 @@ def main():
         default=None,
         help="Adversarial dataset K (1, 3, or 5). When set, evaluate and plot "
         "mean log-likelihood on original and adversarial test data every "
-        "--eval-every iterations, and save the best adversarial-LL checkpoint.",
+        "--eval-every iterations.",
     )
     parser.add_argument(
         "--eval-every",
@@ -535,7 +503,6 @@ def main():
 
     original_data = adversarial_data = None
     plotter = None
-    ckpt_path = None
     if args.dataset_k is not None:
         dataset_name = circuit_path_to_dataset_name(path)
         print(f"loading eval datasets for {dataset_name!r} (K={args.dataset_k})")
@@ -547,10 +514,6 @@ def main():
             f"adversarial K={args.dataset_k}: {len(adversarial_data)} rows"
         )
         plotter = LiveLikelihoodPlot(dataset_name, args.dataset_k)
-        ckpt_path = best_checkpoint_path(
-            Path(args.output) if args.output else None,
-            path,
-        )
 
     p_theta, lam = run_dro(
         p_hat,
@@ -568,7 +531,6 @@ def main():
         original_data=original_data,
         adversarial_data=adversarial_data,
         plotter=plotter,
-        best_ckpt_path=ckpt_path,
     )
 
     if args.output:

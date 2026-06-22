@@ -68,7 +68,7 @@ circuit.log_likelihood({0: 0, 1: 1})
 circuit.sample(5, seed=0)
 
 data = np.random.randint(0, 2, size=(1000, 2)).astype(np.int32)
-circuit.batched_log_likelihood(data)
+circuit.compile().log_likelihood(data)
 ```
 
 ### Training

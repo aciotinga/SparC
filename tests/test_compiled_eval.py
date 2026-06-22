@@ -32,16 +32,16 @@ def _mixed_circuit():
 class TestCompiledCircuit:
     def test_batched_matches_per_row_dict(self):
         circuit = _mixed_circuit()
+        compiled = circuit.compile()
         n = 64
         rng = np.random.default_rng(0)
         vars_ = sorted(circuit.root.scope_as_list())
         cards = {v: 2 for v in vars_}
-        # Default column mapping is identity: need columns at var indices.
         width = max(vars_) + 1
         data = np.zeros((n, width), dtype=np.int32)
         for v in vars_:
             data[:, v] = rng.integers(0, cards[v], size=n)
-        batched = circuit.batched_log_likelihood(data)
+        batched = compiled.log_likelihood(data)
         per_row = np.array(
             [
                 circuit.log_likelihood({vars_[i]: int(data[r, vars_[i]]) for i in range(len(vars_))})
@@ -52,10 +52,10 @@ class TestCompiledCircuit:
 
     def test_var_to_col_reordering(self):
         circuit = _mixed_circuit()
-        # columns ordered [var9, var5] instead of default [5, 9]
+        compiled = circuit.compile()
         data = np.array([[0, 1], [1, 0], [1, 1]], dtype=np.int32)
         var_to_col = {5: 1, 9: 0}
-        batched = circuit.batched_log_likelihood(data, var_to_col=var_to_col)
+        batched = compiled.log_likelihood(data, var_to_col=var_to_col)
         expected = [
             circuit.log_likelihood({5: 1, 9: 0}),
             circuit.log_likelihood({5: 0, 9: 1}),
@@ -65,17 +65,19 @@ class TestCompiledCircuit:
 
     def test_invalid_column_mapping_raises(self):
         circuit = _mixed_circuit()
+        compiled = circuit.compile()
         data = np.zeros((2, 1), dtype=np.int32)
         with pytest.raises(ValueError, match="out of range"):
-            circuit.batched_log_likelihood(data, var_to_col={5: 0, 9: 5})
+            compiled.log_likelihood(data, var_to_col={5: 0, 9: 5})
 
     def test_out_of_range_value_raises(self):
         circuit = _mixed_circuit()
+        compiled = circuit.compile()
         data = np.array([[0, 99]], dtype=np.int32)
         with pytest.raises(ValueError, match="out of range"):
-            circuit.batched_log_likelihood(data)
+            compiled.log_likelihood(data)
 
-    def test_direct_compiled_matches_wrapper(self):
+    def test_direct_compiled_matches_object_path(self):
         root = _mixed_circuit().root
         compiled = CompiledCircuit(root)
         row = {5: 0, 9: 1}
@@ -85,6 +87,12 @@ class TestCompiledCircuit:
         assert_allclose(
             compiled.log_likelihood(data)[0],
             log_likelihood(root, row),
+            rtol=0,
+            atol=1e-12,
+        )
+        assert_allclose(
+            compiled.likelihood(row),
+            likelihood(root, row),
             rtol=0,
             atol=1e-12,
         )

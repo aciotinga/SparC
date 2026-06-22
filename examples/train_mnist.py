@@ -118,7 +118,7 @@ def rows_to_dataset(rows: np.ndarray) -> list[dict[int, int]]:
 
 def mean_log_likelihood(circuit, rows: np.ndarray) -> float:
     """Batched mean log-likelihood over integer rows (N, D)."""
-    return float(circuit.batched_log_likelihood(rows).mean())
+    return float(circuit.compile().log_likelihood(rows).mean())
 
 
 def plot_samples(

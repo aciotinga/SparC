@@ -15,8 +15,10 @@ be added without editing existing query code.
 4. Add serializer support in [`CircuitSerializer`][sparc.io.serializer.CircuitSerializer]
    if you need save/load.
 
-No changes are required in `eval.pyx` or query modules — dispatch goes through
-the leaf vtable and `node_kind` tags.
+No changes are required in `eval.pyx` or query modules for the object-graph path — dispatch goes through
+the leaf vtable and `node_kind` tags. For the fast path, subclass
+[`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode] and implement
+`pmf_at`; then `circuit.compile()` materializes PMFs into flat pools.
 
 ## New ground metric
 

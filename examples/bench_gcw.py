@@ -56,11 +56,12 @@ def main():
     for cfg in configs:
         c1 = make_circuit(0, **cfg)
         c2 = make_circuit(1, **cfg)
-        gcw_crossterm(c1, c2)
-        gcw_crossterm_and_grad(c1, c2)
+        cc1 = c1.compile()
+        cc2 = c2.compile()
+        gcw_crossterm_and_grad(cc1, cc2)
 
-        fwd_best, _ = time_call(lambda: gcw_crossterm(c1, c2), args.repeats)
-        grad_best, _ = time_call(lambda: gcw_crossterm_and_grad(c1, c2), args.repeats)
+        fwd_best, _ = time_call(lambda: gcw_crossterm(cc1, cc2), args.repeats)
+        grad_best, _ = time_call(lambda: gcw_crossterm_and_grad(cc1, cc2), args.repeats)
         label = (f"vars={cfg['num_vars']} cats={cfg['num_categories']} "
                  f"sa={cfg['sum_arity']} pa={cfg['prod_arity']}")
         print(f"{label:<48}{fwd_best * 1e3:>16.3f}{grad_best * 1e3:>22.3f}")
@@ -70,10 +71,12 @@ def main():
         cfg = configs[-1]
         c1 = make_circuit(0, **cfg)
         c2 = make_circuit(1, **cfg)
+        cc1 = c1.compile()
+        cc2 = c2.compile()
         pr = cProfile.Profile()
         pr.enable()
         for _ in range(args.repeats):
-            gcw_crossterm_and_grad(c1, c2)
+            gcw_crossterm_and_grad(cc1, cc2)
         pr.disable()
         stats = pstats.Stats(pr).sort_stats("cumulative")
         stats.print_stats(25)

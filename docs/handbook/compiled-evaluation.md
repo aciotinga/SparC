@@ -1,29 +1,37 @@
 # Compiled Evaluation
 
-Batched log-likelihood and several query fast paths flatten the circuit DAG
-into a **`CompiledGraph`** (internal module `sparc._graph`; see
-[architecture](architecture.md)) or user-facing
-**`CompiledCircuit`** ([`sparc.eval.CompiledCircuit`][sparc.eval.CompiledCircuit]).
+Fast inference uses a pre-built **`CompiledCircuit`** ([`sparc._graph.CompiledCircuit`][sparc._graph.CompiledCircuit]).
 
-## Why flatten?
+## Two inference tiers
 
-The object-graph evaluator dispatches through Python/Cython method calls per
-node. For datasets with many rows, flattening to CSR-like arrays allows a
-single `nogil` pass over all samples.
+| Tier | Input | Path |
+|------|-------|------|
+| Object-graph | `Circuit` / `CircuitNode` | Memoized recursion on live nodes (GIL) |
+| Flat / nogil | `CompiledCircuit` | CSR layout, precomputed PMFs, `nogil` numeric cores |
 
-## CompiledCircuit
+Compile once when topology is fixed:
 
 ```python
 compiled = circuit.compile()
 log_lls = compiled.log_likelihood(data, var_to_col=None)
 ```
 
-Requirements:
+After parameter updates (e.g. MLE steps), refresh flat pools without rebuilding topology:
 
-- Leaves must be [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode]
-  over a single variable (the leaf family used by OT/expectation queries).
-- Unsupported leaf types set `has_fallback=True`; the library falls back to
-  the object-graph path automatically.
+```python
+compiled.refresh_parameters()
+```
+
+## Requirements
+
+- All leaves must be [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode] (any subclass; PMFs materialized via `pmf_at` at compile time).
+- Non-discrete custom `InputNode` subclasses remain object-graph-only via `Circuit`.
+
+## Pairwise queries
+
+CW, GCW, and expectation queries require **both** operands to be `CompiledCircuit` for the flat path. Mixed `Circuit` + `CompiledCircuit` raises `TypeError`.
+
+Module-level functions (`cw_distance`, `gcw_crossterm`, …) dispatch on operand type automatically.
 
 ## Layout
 
@@ -31,16 +39,13 @@ The flattened representation stores:
 
 - `kinds`: per-node type tag (input / product / sum)
 - `child_off`, `children_flat`: CSR child indices
-- `sum_logw_flat`: log mixture weights for sum nodes
-- `leaf_var`, `leaf_card`, `leaf_logpmf_flat`: leaf metadata and log-PMFs
+- `sum_w_flat`, `sum_logw_flat`: mixture weights for sum nodes
+- `leaf_var`, `leaf_card`, `leaf_pmf_flat`, `leaf_logpmf_flat`: leaf metadata and PMFs
+- `node_ids`, `scope_sig`: gradient keys and product-child matching
 
-## Single-datapoint path
+## Migration
 
-`likelihood`, `log_likelihood`, and `sample` try the flat path when possible;
-otherwise they use memoized recursion on the live node objects.
-
-## Gradients
-
-[`mean_log_likelihood_and_grad`][sparc.grad.mean_log_likelihood_and_grad] uses
-the same flat graph when available, accumulating into a [`GradBundle`][sparc.grad.GradBundle]
-over the full dataset in one reverse pass.
+| Before | After |
+|--------|-------|
+| `circuit.batched_log_likelihood(data)` | `circuit.compile().log_likelihood(data)` |
+| Silent flat path on `circuit.log_likelihood(dict)` | Object-graph only; use `compiled.likelihood(...)` for speed |

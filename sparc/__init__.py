@@ -55,7 +55,7 @@ __all__ = [
 
 _LAZY_EXPORTS = {
     "Circuit": ("sparc.circuit", "Circuit"),
-    "CompiledCircuit": ("sparc.eval", "CompiledCircuit"),
+    "CompiledCircuit": ("sparc._graph", "CompiledCircuit"),
     "likelihood": ("sparc.eval", "likelihood"),
     "log_likelihood": ("sparc.eval", "log_likelihood"),
     "sample": ("sparc.eval", "sample"),

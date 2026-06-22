@@ -7,49 +7,32 @@ inference and differentiable queries.
 flowchart TB
     subgraph userLayer [User Layer]
         Circuit[Circuit wrapper]
+        Compiled[CompiledCircuit]
         Builders[builders/]
         Structures[structures/]
         Optim[optim.MLETrainer]
         IO[io/ serializer]
     end
 
-    subgraph cythonCore [Cython Core]
-        Nodes[nodes.pyx]
-        Eval[eval.pyx]
-        Grad[grad.pyx]
-        Graph[_graph.pyx]
+    subgraph objectPath [Object-graph path]
+        EvalObj[eval likelihood / sample]
+        GradObj[grad mean_log_likelihood_and_grad]
+        CoupleObj[CoupleContext queries]
     end
 
-    subgraph queries [Pairwise Queries]
-        Engine[queries/_engine.pyx]
-        CW[cw.pyx]
-        GCW[gcw.pyx]
-        Exp[expectation.pyx]
-        ESD[esd.pyx]
+    subgraph flatPath [CompiledCircuit flat path]
+        Graph[_graph CompiledCircuit]
+        EvalFlat[log_likelihood / likelihood / sample]
+        GradFlat[compiled_mean_log_likelihood_and_grad]
+        QueriesFlat[CW GCW expectation ESD]
     end
 
-    subgraph solvers [Solvers]
-        Transport[transport.pyx]
-        Assign[assignment.pyx]
-        NW[northwest.pyx]
-    end
-
-    Builders --> Nodes
-    Structures --> Builders
-    Circuit --> Eval
-    Circuit --> Grad
-    Eval --> Graph
-    Grad --> Graph
-    CW --> Engine
-    GCW --> Engine
-    Exp --> Engine
-    ESD --> Graph
-    CW --> Transport
-    CW --> NW
-    GCW --> Transport
-    GCW --> Assign
-    GCW --> NW
-    Optim --> Grad
+    Builders --> Circuit
+    Structures --> Circuit
+    Circuit --> objectPath
+    Circuit -->|compile once| Compiled
+    Compiled --> flatPath
+    Optim --> Circuit
 ```
 
 ## Package layout
@@ -57,11 +40,11 @@ flowchart TB
 | Path | Role |
 |------|------|
 | `sparc/circuit.py` | High-level `Circuit` wrapper |
+| `sparc/_graph.pyx` | `CompiledCircuit` flattened layout |
 | `sparc/nodes.pyx` | Node types and leaf vtable |
-| `sparc/eval.pyx` | Likelihood, sampling, `CompiledCircuit` |
-| `sparc/grad.pyx` | `GradBundle`, MLE gradients |
+| `sparc/eval.pyx` | Object-graph likelihood / sampling |
+| `sparc/grad.pyx` | `GradBundle`, object + compiled gradients |
 | `sparc/metrics.pyx` | Pluggable ground metrics |
-| `sparc/_graph.pyx` | Flattened `CompiledGraph` for fast paths |
 | `sparc/queries/` | CW, GCW, expectation, ESD |
 | `sparc/solvers/` | Transport, Hungarian, NW coupling |
 | `sparc/builders/` | Random circuit construction |
@@ -69,22 +52,13 @@ flowchart TB
 | `sparc/io/` | JSON serialization |
 | `sparc/optim.py` | Simplex-projected optimization |
 
-## Node model
-
-- **SumNode**: mixture over children; parameters on the simplex.
-- **ProductNode**: product over children with disjoint scopes.
-- **InputNode**: leaf with `prob_c` / `sample_into_c` vtable hooks.
-- **FiniteDiscreteInputNode**: extends leaves with `support_size` / `pmf_at`
-  for Wasserstein and expectation queries.
-
 ## Data flow
 
 1. User builds or loads a circuit (`Circuit(root)`).
-2. Single-datapoint queries walk the object graph with memoization.
-3. Batched evaluation and query fast paths flatten the DAG into
-   `CompiledGraph` / `CompiledCircuit` and run `nogil` loops.
-4. Gradients accumulate into `GradBundle` dicts keyed by `node.id`.
-5. `sparc.optim` projects gradient steps back onto simplices.
+2. Object-graph queries walk live nodes with memoization.
+3. `circuit.compile()` flattens the DAG into `CompiledCircuit` once.
+4. Compiled queries use `nogil` numeric cores over CSR arrays; call `refresh_parameters()` after weight updates.
+5. Gradients accumulate into `GradBundle` dicts keyed by `node.id`.
 
 ## Related handbooks
 

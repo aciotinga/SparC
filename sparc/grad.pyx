@@ -13,7 +13,7 @@ from libc.math cimport exp, INFINITY, isfinite, log
 
 import numpy as np
 
-from sparc._graph cimport CompiledGraph
+from sparc._graph cimport CompiledCircuit
 from sparc._mathutils cimport sp_logsumexp, sp_safe_log
 from sparc.nodes cimport (
     BernoulliInputNode,
@@ -215,7 +215,7 @@ cdef class _LLGradContext:
 # --- Flattened nogil gradient path --------------------------------------------
 
 cdef void _build_grad_matrix(
-    CompiledGraph g, list dataset, vector[int]& mat, Py_ssize_t n_rows
+    CompiledCircuit g, list dataset, vector[int]& mat, Py_ssize_t n_rows
 ) except *:
     """Dense (n_rows x width) evidence matrix with object-path validation."""
     cdef size_t width = <size_t>(g.max_var + 1)
@@ -258,7 +258,7 @@ cdef void _build_grad_matrix(
 
 
 cdef void _flat_grad_core(
-    CompiledGraph g,
+    CompiledCircuit g,
     const int* mat,
     Py_ssize_t n_rows,
     size_t width,
@@ -370,7 +370,7 @@ cdef void _flat_grad_core(
     total_ll_out[0] = total
 
 
-cdef tuple _flat_solve_dataset(CompiledGraph g, list dataset):
+cdef tuple _flat_solve_dataset(CompiledCircuit g, list dataset):
     cdef Py_ssize_t n = len(dataset)
     if n == 0:
         raise ValueError("dataset must contain at least one datapoint")
@@ -427,23 +427,34 @@ cdef tuple _flat_solve_dataset(CompiledGraph g, list dataset):
 
 
 def mean_log_likelihood_and_grad(CircuitNode root, object dataset):
-    """Mean log-likelihood of a dataset and its gradient w.r.t. circuit params.
-
-    Args:
-        root: Circuit root with propagated scope.
-        dataset: Iterable of ``{var: value}`` dicts, one per datapoint.
-
-    Returns:
-        ``(mean_ll, grads)`` where ``mean_ll`` is the average log-likelihood
-        and ``grads`` is a :class:`GradBundle`.
-    """
+    """Mean log-likelihood and gradient (object-graph path)."""
     cdef list data = list(dataset)
     if root.scope.size() == 0:
         raise ValueError(
             "root scope is empty; call propagate_scope() on the circuit first"
         )
-    cdef CompiledGraph g = CompiledGraph()
-    g.build(root)
-    if g.has_fallback:
-        return _LLGradContext().solve_dataset(root, data)
+    return _LLGradContext().solve_dataset(root, data)
+
+
+def compiled_mean_log_likelihood_and_grad(CompiledCircuit g, object dataset):
+    """Mean log-likelihood and gradient (flat nogil path)."""
+    cdef Py_ssize_t n_rows
+    cdef Py_ssize_t r
+    cdef list data
+    cdef object row
+    cdef int c
+    cdef Py_ssize_t n_cols
+    if isinstance(dataset, np.ndarray):
+        if dataset.ndim != 2:
+            raise ValueError("dataset array must be 2-D (n_samples, n_columns)")
+        n_rows = dataset.shape[0]
+        n_cols = dataset.shape[1]
+        data = []
+        for r in range(n_rows):
+            row = {}
+            for c in range(n_cols):
+                row[c] = int(dataset[r, c])
+            data.append(row)
+        return _flat_solve_dataset(g, data)
+    data = list(dataset)
     return _flat_solve_dataset(g, data)

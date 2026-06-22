@@ -60,7 +60,7 @@ class TestBatchedVsDict:
         nvars = len(circuit.root.scope_as_list())
         data = np.random.randint(0, 4, size=(32, nvars)).astype(np.int32)
 
-        batched = circuit.batched_log_likelihood(data)
+        batched = circuit.compile().log_likelihood(data)
         per_row = np.array(
             [circuit.log_likelihood({v: int(data[i, v]) for v in range(nvars)})
              for i in range(data.shape[0])]

@@ -132,29 +132,15 @@ class Circuit:
         return sample(self.root, n_samples, seed)
 
     def compile(self):
-        """Build a :class:`~sparc.eval.CompiledCircuit` for fast batched evaluation.
+        """Build a :class:`~sparc._graph.CompiledCircuit` for fast inference.
 
-        Returns:
-            A flattened, vectorized evaluator for the same circuit.
+        Compile once when topology is fixed. Call
+        :meth:`~sparc.eval.CompiledCircuit.refresh_parameters` after parameter
+        updates during training.
         """
-        from sparc.eval import CompiledCircuit
+        from sparc._graph import CompiledCircuit
 
         return CompiledCircuit(self.root)
-
-    def batched_log_likelihood(self, data, var_to_col=None):
-        """Vectorized log-likelihood over a 2-D integer dataset.
-
-        Args:
-            data: Integer array of shape ``(n_samples, n_vars)`` where each
-                column holds values for one variable.
-            var_to_col: Optional mapping from variable index to column index.
-                When omitted, columns are assumed to follow variable order
-                ``0, 1, ...``.
-
-        Returns:
-            1-D array of log-likelihoods, one per row of ``data``.
-        """
-        return self.compile().log_likelihood(data, var_to_col)
 
     def clone(self) -> "Circuit":
         """Return an independent deep copy of the circuit.

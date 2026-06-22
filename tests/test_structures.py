@@ -128,7 +128,7 @@ def test_structure_batched_log_likelihood():
     circuit = HMM(seq_length=6, num_latents=3, num_emits=3, seed=0)
     samples = circuit.sample(20, seed=1)
     batch = np.array([[s[v] for v in range(6)] for s in samples])
-    batched = circuit.batched_log_likelihood(batch)
+    batched = circuit.compile().log_likelihood(batch)
     assert batched.shape == (20,)
     single = np.array([circuit.log_likelihood(s) for s in samples])
     assert batched == pytest.approx(single, abs=1e-9)

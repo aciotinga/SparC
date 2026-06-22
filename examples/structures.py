@@ -32,7 +32,7 @@ def main():
           float(np.mean([hmm.log_likelihood(x) for x in data])))
 
     batch = np.array([[x[v] for v in range(8)] for x in data])
-    print("HMM batched LL shape:", hmm.batched_log_likelihood(batch).shape)
+    print("HMM batched LL shape:", hmm.compile().log_likelihood(batch).shape)
 
     model = HMM(seq_length=8, num_latents=4, num_emits=3, seed=99)
     history = MLETrainer(model, lr=0.3).fit(data, epochs=40)
