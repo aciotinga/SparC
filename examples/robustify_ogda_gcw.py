@@ -1,20 +1,21 @@
-"""Robustify a saved PC via DRO using Optimistic Gradient Descent Ascent (OGDA).
+"""Robustify a saved PC via DRO using OGDA with a GCW-ball constraint.
 
 Loads a ``gcw-circuit-v1`` JSON from ``examples/example_pcs/`` and solves
 
-    max_theta  min_{Q : CW(P_hat, Q) <= k}  log E_Q[P_theta]
+    max_theta  min_{Q : GCW(P_hat, Q) <= k}  log E_P[Q_theta]
 
 via a Lagrangian saddle point with simultaneous OGDA updates on theta, phi, and
 lambda. Each iteration extrapolates player directions as ``2 * g_t - g_{t-1}``
 (plain GDA on the first step). The theta player uses a sample-based Monte Carlo
-estimate of ``grad_theta E_Q[log P_theta]``.
+estimate of ``grad_theta E_Q[log P_theta]``. The phi player minimizes a Monte
+Carlo estimate of ``log E_P[Q]`` by sampling from P_theta.
 
 By default ``eta_phi = 10 * eta_theta``. Override with ``--eta-phi`` if needed.
-Use ``--theta-seed`` to stabilize stochastic theta gradients.
+Use ``--theta-seed`` / ``--phi-seed`` to stabilize stochastic gradients.
 
-    python examples/robustify_ogda.py plants.json
-    python examples/robustify_ogda.py plants.json --dataset-k 3 --eval-every 5
-    python examples/robustify_ogda.py plants.json --gda  # ablation: disable optimism
+    python examples/robustify_ogda_gcw.py plants.json
+    python examples/robustify_ogda_gcw.py plants.json --dataset-k 3 --eval-every 5
+    python examples/robustify_ogda_gcw.py plants.json --gda  # ablation: disable optimism
 """
 
 from __future__ import annotations
@@ -26,13 +27,9 @@ from pathlib import Path
 import numpy as np
 
 from sparc.circuit import Circuit
+from sparc.grad import GradBundle
 from sparc.optim import apply_grads, global_grad_norm
-from sparc.queries import (
-    cw_distance,
-    cw_distance_and_grad,
-    log_exp_query,
-    log_exp_query_and_grad,
-)
+from sparc.queries import gcw_crossterm, gcw_crossterm_and_grad
 
 _EXAMPLES = Path(__file__).resolve().parent
 _EXAMPLE_PCS = _EXAMPLES / "example_pcs"
@@ -41,16 +38,19 @@ _ADVERSARIAL_DATASETS = _EXAMPLES / "adversarial_datasets"
 
 K = 1.0
 ETA_THETA = 1e-3
-ETA_PHI_RATIO = 3.0
-ETA_LAMBDA = 10.0
-LAMBDA_MAX = 1000.0
+ETA_PHI_RATIO = 10.0
+ETA_LAMBDA = 20.0
+LAMBDA_MAX = 1e3
 LAMBDA_LEAK = 1.0
 ALPHA = 1.0
 METRIC_P = 1.0
 SCALE_FACTOR = 1.0
 WARM_START_ITERS = 5
-THETA_NUM_SAMPLES = 100
+THETA_NUM_SAMPLES = 2000
 THETA_SEED: int | None = None
+NUM_SAMPLES = 2000
+PHI_SEED: int | None = None
+PROB_FLOOR = 1e-20
 
 
 def default_eta_phi(eta_theta: float) -> float:
@@ -122,6 +122,68 @@ def mean_log_likelihood(circuit: Circuit, rows: np.ndarray) -> float:
     return float(circuit.batched_log_likelihood(rows).mean())
 
 
+def _samples_to_array(samples: list[dict[int, int]]) -> np.ndarray:
+    if not samples:
+        raise ValueError("samples must be non-empty")
+    vars_sorted = sorted(samples[0].keys())
+    return np.array(
+        [[s[v] for v in vars_sorted] for s in samples],
+        dtype=np.int32,
+    )
+
+
+def sample_log_exp_p_query(
+    p_theta: Circuit,
+    q_phi: Circuit,
+    *,
+    num_samples: int,
+    seed: int | None = None,
+) -> float:
+    """Monte Carlo estimate of log E_P[Q(X)]."""
+    samples = p_theta.sample(num_samples, seed=seed)
+    data = _samples_to_array(samples)
+    log_q = q_phi.batched_log_likelihood(data)
+    mean_q = float(np.exp(log_q).mean())
+    return float(np.log(max(mean_q, PROB_FLOOR)))
+
+
+def sample_log_exp_p_query_and_grad(
+    p_theta: Circuit,
+    q_phi: Circuit,
+    *,
+    num_samples: int,
+    seed: int | None = None,
+) -> tuple[float, GradBundle]:
+    """Monte Carlo estimate of log E_P[Q(X)] and grad w.r.t. q_phi."""
+    samples = p_theta.sample(num_samples, seed=seed)
+    data = _samples_to_array(samples)
+    log_q = q_phi.batched_log_likelihood(data)
+    q_vals = np.exp(log_q)
+    mean_q = float(q_vals.mean())
+    mean_q = max(mean_q, PROB_FLOOR)
+    log_val = float(np.log(mean_q))
+
+    inv_mean = 1.0 / mean_q
+    inv_n = 1.0 / num_samples
+    sum_g: dict = {}
+    cat_g: dict = {}
+    for sample, qv in zip(samples, q_vals):
+        _, grad_log = q_phi.mean_log_likelihood_and_grad([sample])
+        scale = inv_mean * inv_n * float(qv)
+        for nid, vec in grad_log.sum_grads.items():
+            arr = np.asarray(vec, dtype=np.float64)
+            sum_g[nid] = sum_g.get(nid, 0.0) + scale * arr
+        for nid, vec in grad_log.cat_grads.items():
+            arr = np.asarray(vec, dtype=np.float64)
+            cat_g[nid] = cat_g.get(nid, 0.0) + scale * arr
+
+    grads = GradBundle()
+    grads.value = log_val
+    grads.sum_grads = sum_g
+    grads.cat_grads = cat_g
+    return log_val, grads
+
+
 class LiveLikelihoodPlot:
     """Live-updating chart of mean log-likelihood on original vs adversarial test data."""
 
@@ -163,10 +225,10 @@ class LiveLikelihoodPlot:
         self._plt.show()
 
 
-def combine_phi_grads(logexp_grads, cw_grads, lam):
+def combine_phi_grads(logexp_grads, gcw_grads, lam):
     """Normalized convex combination of the two phi descent directions."""
     n_e = global_grad_norm(logexp_grads)
-    n_c = global_grad_norm(cw_grads)
+    n_c = global_grad_norm(gcw_grads)
     s_e = 1.0 / n_e if n_e > 0.0 else 0.0
     s_c = 1.0 / n_c if n_c > 0.0 else 0.0
     w = lam / (1.0 + lam)
@@ -174,14 +236,14 @@ def combine_phi_grads(logexp_grads, cw_grads, lam):
     c_c = w * s_c
 
     sum_g, cat_g = {}, {}
-    for out, le_d, cw_d in (
-        (sum_g, logexp_grads.sum_grads, cw_grads.sum_grads),
-        (cat_g, logexp_grads.cat_grads, cw_grads.cat_grads),
+    for out, le_d, gcw_d in (
+        (sum_g, logexp_grads.sum_grads, gcw_grads.sum_grads),
+        (cat_g, logexp_grads.cat_grads, gcw_grads.cat_grads),
     ):
-        for nid in set(le_d) | set(cw_d):
+        for nid in set(le_d) | set(gcw_d):
             le = np.asarray(le_d.get(nid, 0.0), dtype=np.float64)
-            cw = np.asarray(cw_d.get(nid, 0.0), dtype=np.float64)
-            out[nid] = c_e * le + c_c * cw
+            gcw = np.asarray(gcw_d.get(nid, 0.0), dtype=np.float64)
+            out[nid] = c_e * le + c_c * gcw
     return (sum_g, cat_g)
 
 
@@ -259,23 +321,30 @@ def compute_player_grads(
     lam: float,
     *,
     k: float,
-    cw_kw: dict,
+    gcw_kw: dict,
     theta_num_samples: int,
     theta_seed: int | None,
+    num_samples: int,
+    phi_seed: int | None,
     skip_theta: bool = False,
 ) -> tuple[object | None, tuple[dict, dict], float, float]:
-    """Return (grad_theta, phi_grads, violation, cw_val)."""
-    _, _, grad_phi_logexp = log_exp_query_and_grad(p_theta, q_phi)
-    cw_val, cw_grads = cw_distance_and_grad(p_hat, q_phi, **cw_kw)
-    phi_grads = combine_phi_grads(grad_phi_logexp, cw_grads, lam)
-    violation = ALPHA * (cw_val - k)
+    """Return (grad_theta, phi_grads, violation, gcw_val)."""
+    _, grad_phi_logexp = sample_log_exp_p_query_and_grad(
+        p_theta,
+        q_phi,
+        num_samples=num_samples,
+        seed=phi_seed,
+    )
+    gcw_val, gcw_grads = gcw_crossterm_and_grad(p_hat, q_phi, **gcw_kw)
+    phi_grads = combine_phi_grads(grad_phi_logexp, gcw_grads, lam)
+    violation = ALPHA * (gcw_val - k)
 
     grad_theta = None
     if not skip_theta:
         q_samples = q_phi.sample(theta_num_samples, seed=theta_seed)
         _, grad_theta = p_theta.mean_log_likelihood_and_grad(q_samples)
 
-    return grad_theta, phi_grads, violation, cw_val
+    return grad_theta, phi_grads, violation, gcw_val
 
 
 @dataclass
@@ -300,25 +369,29 @@ def ogda_step(
     state: OgdaState,
     *,
     k: float,
-    cw_kw: dict,
+    gcw_kw: dict,
     eta_theta: float,
     eta_phi: float,
     eta_lambda: float,
     theta_num_samples: int,
     theta_seed: int | None,
+    num_samples: int,
+    phi_seed: int | None,
     use_ogda: bool,
     update_theta: bool = True,
 ) -> tuple[float, float, float]:
-    """One OGDA step; return (lam, log_e, cw)."""
-    grad_theta, phi_grads, violation, cw_val = compute_player_grads(
+    """One OGDA step; return (lam, log_e, gcw)."""
+    grad_theta, phi_grads, violation, gcw_val = compute_player_grads(
         p_theta,
         q_phi,
         p_hat,
         lam,
         k=k,
-        cw_kw=cw_kw,
+        gcw_kw=gcw_kw,
         theta_num_samples=theta_num_samples,
         theta_seed=theta_seed,
+        num_samples=num_samples,
+        phi_seed=phi_seed,
         skip_theta=not update_theta,
     )
 
@@ -336,8 +409,10 @@ def ogda_step(
     state.prev_phi_grad = phi_grads
     state.prev_violation = violation
 
-    log_e = log_exp_query(p_theta, q_phi)
-    return lam, log_e, cw_val
+    log_e = sample_log_exp_p_query(
+        p_theta, q_phi, num_samples=num_samples, seed=phi_seed
+    )
+    return lam, log_e, gcw_val
 
 
 def run_dro_ogda(
@@ -351,6 +426,8 @@ def run_dro_ogda(
     warm_start_iters=WARM_START_ITERS,
     theta_num_samples=THETA_NUM_SAMPLES,
     theta_seed=THETA_SEED,
+    num_samples=NUM_SAMPLES,
+    phi_seed=PHI_SEED,
     metric_p=METRIC_P,
     scale_factor=SCALE_FACTOR,
     use_ogda=True,
@@ -363,7 +440,11 @@ def run_dro_ogda(
     if eta_phi is None:
         eta_phi = default_eta_phi(eta_theta)
 
-    cw_kw = dict(metric_p=metric_p, scale_factor=scale_factor)
+    gcw_kw = dict(
+        metric_p=metric_p,
+        scale_factor_1=scale_factor,
+        scale_factor_2=scale_factor,
+    )
 
     p_theta = p_hat.clone()
     q_phi = p_hat.clone()
@@ -377,8 +458,9 @@ def run_dro_ogda(
 
     mode = "OGDA" if use_ogda else "GDA"
     print(
-        f"initial ({mode}): log(E)={log_exp_query(p_theta, q_phi):.6f}  "
-        f"CW={cw_distance(p_hat, q_phi, **cw_kw):.6f}  "
+        f"initial ({mode}): log(E_P[Q])="
+        f"{sample_log_exp_p_query(p_theta, q_phi, num_samples=num_samples, seed=phi_seed):.6f}  "
+        f"GCW={gcw_crossterm(p_hat, q_phi, **gcw_kw):.6f}  "
         f"eta_theta={eta_theta:g}  eta_phi={eta_phi:g}"
     )
 
@@ -401,19 +483,21 @@ def run_dro_ogda(
 
     step_kw = dict(
         k=k,
-        cw_kw=cw_kw,
+        gcw_kw=gcw_kw,
         eta_theta=eta_theta,
         eta_phi=eta_phi,
         eta_lambda=eta_lambda,
         theta_num_samples=theta_num_samples,
         theta_seed=theta_seed,
+        num_samples=num_samples,
+        phi_seed=phi_seed,
         use_ogda=use_ogda,
     )
 
     if warm_start_iters > 0:
         print(f"  warm start: {warm_start_iters} Q-only {mode} iteration(s)")
         for w_iter in range(1, warm_start_iters + 1):
-            lam, log_e, cw = ogda_step(
+            lam, log_e, gcw = ogda_step(
                 p_theta,
                 q_phi,
                 p_hat,
@@ -424,12 +508,12 @@ def run_dro_ogda(
             )
             print(
                 f"  [warm-start {w_iter}/{warm_start_iters}] "
-                f"log(E)={log_e:.6f}  CW={cw:.6f}  "
-                f"violation={cw - k:+.6f}  lambda={lam:.4f}"
+                f"log(E_P[Q])={log_e:.6f}  GCW={gcw:.6f}  "
+                f"violation={gcw - k:+.6f}  lambda={lam:.4f}"
             )
 
     for it in range(1, num_iters + 1):
-        lam, log_e, cw = ogda_step(
+        lam, log_e, gcw = ogda_step(
             p_theta,
             q_phi,
             p_hat,
@@ -439,8 +523,8 @@ def run_dro_ogda(
             **step_kw,
         )
         print(
-            f"  iter {it:3d}: log(E)={log_e:.6f}  CW={cw:.6f}  "
-            f"violation={cw - k:+.6f}  lambda={lam:.4f}"
+            f"  iter {it:3d}: log(E_P[Q])={log_e:.6f}  GCW={gcw:.6f}  "
+            f"violation={gcw - k:+.6f}  lambda={lam:.4f}"
         )
 
         if do_eval and eval_every is not None and it % eval_every == 0:
@@ -471,16 +555,17 @@ def run_dro_ogda(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Robustify a PC with sample-based DRO using OGDA."
+        description="Robustify a PC with sample-based DRO using OGDA (GCW ball)."
     )
     parser.add_argument(
         "circuit",
         help="Basename or path to a gcw-circuit-v1 JSON (e.g. plants.json or adult)",
     )
-    parser.add_argument("--k", type=float, default=K, help="CW-ball radius")
+    parser.add_argument("--k", type=float, default=K, help="GCW-ball radius")
     parser.add_argument("--iters", type=int, default=20, help="OGDA iterations")
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         help="Optional path to save the robustified circuit (gcw-circuit-v1 JSON)",
     )
     parser.add_argument(
@@ -519,6 +604,18 @@ def main():
         help="RNG seed for theta sampling (omit for fresh MC noise each iter).",
     )
     parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=NUM_SAMPLES,
+        help=f"Samples from P_theta per phi update (default: {NUM_SAMPLES}).",
+    )
+    parser.add_argument(
+        "--phi-seed",
+        type=int,
+        default=None,
+        help="RNG seed for phi sampling (omit for fresh MC noise each inner iter).",
+    )
+    parser.add_argument(
         "--eta-theta",
         type=float,
         default=ETA_THETA,
@@ -549,6 +646,8 @@ def main():
         parser.error("--warm-start-iters must be non-negative")
     if args.theta_num_samples < 1:
         parser.error("--theta-num-samples must be at least 1")
+    if args.num_samples < 1:
+        parser.error("--num-samples must be at least 1")
     if args.eta_theta <= 0:
         parser.error("--eta-theta must be positive")
     if args.eta_phi is not None and args.eta_phi <= 0:
@@ -592,6 +691,8 @@ def main():
         warm_start_iters=args.warm_start_iters,
         theta_num_samples=args.theta_num_samples,
         theta_seed=args.theta_seed,
+        num_samples=args.num_samples,
+        phi_seed=args.phi_seed,
         use_ogda=not args.gda,
         eval_every=args.eval_every if args.dataset_k is not None else None,
         original_data=original_data,
