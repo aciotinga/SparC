@@ -19,6 +19,7 @@ from libcpp.vector cimport vector
 import time
 
 import numpy as np
+cimport numpy as cnp
 
 from sparc.nodes cimport (
     BernoulliInputNode,
@@ -167,38 +168,74 @@ cdef void match_prod_children_flat(
         )
 
 
+cdef int _max_var_from_scope(unordered_set[int]& scope) noexcept:
+    cdef int max_var = -1
+    cdef int v
+    cdef unordered_set[int].iterator it = scope.begin()
+    while it != scope.end():
+        v = deref(it)
+        if v > max_var:
+            max_var = v
+        inc(it)
+    return max_var
+
+
+cdef cnp.ndarray _coerce_data_array(object data, bint allow_1d) except *:
+    if not isinstance(data, np.ndarray):
+        raise TypeError("data must be a numpy.ndarray")
+    cdef cnp.ndarray arr = np.ascontiguousarray(data, dtype=np.int32)
+    if allow_1d and arr.ndim == 1:
+        return arr
+    if arr.ndim == 2:
+        return arr
+    if allow_1d:
+        raise ValueError("data must be 1-D or 2-D (n_samples, n_columns)")
+    raise ValueError("data must be 2-D (n_samples, n_columns)")
+
+
+cdef void _leaf_column_map(
+    CompiledCircuit g,
+    object var_to_col,
+    Py_ssize_t n_cols,
+    vector[int]& leaf_col,
+) except *:
+    cdef size_t i
+    cdef int var
+    cdef int col
+    leaf_col.assign(g.n_nodes, -1)
+    for i in range(g.n_nodes):
+        if g.kinds[i] != NODE_INPUT:
+            continue
+        var = g.leaf_var[i]
+        if var_to_col is None:
+            col = var
+        else:
+            col = int(var_to_col[var])
+        if col < 0 or col >= n_cols:
+            raise ValueError(
+                f"variable {var} maps to column {col} out of range "
+                f"[0, {n_cols})"
+            )
+        leaf_col[i] = col
+
+
 cdef void _build_evidence_vector(
-    CompiledCircuit g, object assignment, vector[int]& ev
+    CompiledCircuit g, cnp.ndarray row, vector[int]& ev
 ) except *:
     cdef int max_var = g.max_var
-    cdef object key
-    cdef object value
-    cdef int var
-    cdef int outcome
+    cdef cnp.ndarray arr = np.asarray(row, dtype=np.int32).ravel()
     cdef size_t n
     cdef int v
     cdef int val
     cdef int card
+    if arr.size <= max_var:
+        raise ValueError(
+            f"assignment array length {arr.size} is shorter than required "
+            f"width {max_var + 1}"
+        )
     ev.assign(max_var + 1, -1)
-    if isinstance(assignment, np.ndarray):
-        arr = np.asarray(assignment, dtype=np.int32).ravel()
-        if arr.size <= max_var:
-            raise ValueError(
-                f"assignment array length {arr.size} is shorter than required "
-                f"width {max_var + 1}"
-            )
-        for var in range(max_var + 1):
-            ev[var] = int(arr[var])
-    else:
-        for key, value in assignment.items():
-            var = int(key)
-            outcome = int(value)
-            if var < 0:
-                raise ValueError(f"variable index must be non-negative, got {var}")
-            if outcome < 0:
-                raise ValueError(f"outcome value must be non-negative, got {outcome}")
-            if var <= max_var:
-                ev[var] = outcome
+    for v in range(max_var + 1):
+        ev[v] = int(arr[v])
     for v in g.variables:
         if ev[v] < 0:
             raise ValueError(f"missing evidence for variable {v}")
@@ -550,34 +587,41 @@ cdef class CompiledCircuit:
                 self.leaf_logpmf_flat[lbase + k] = graph_safe_log(pmf)
 
     def log_likelihood(self, object data, object var_to_col=None):
-        """Batched log-likelihood over a 2-D integer dataset."""
-        cdef object arr = np.ascontiguousarray(data, dtype=np.int32)
-        if arr.ndim != 2:
-            raise ValueError("data must be 2-D (n_samples, n_columns)")
-        cdef Py_ssize_t n_rows = arr.shape[0]
-        cdef Py_ssize_t n_cols = arr.shape[1]
+        """Log-likelihood for a 1-D or 2-D integer assignment array."""
+        return self._likelihood_impl(data, var_to_col, True)
+
+    def likelihood(self, object data, object var_to_col=None):
+        """Likelihood for a 1-D or 2-D integer assignment array."""
+        return self._likelihood_impl(data, var_to_col, False)
+
+    cdef object _likelihood_impl(
+        self, object data, object var_to_col, bint log_space
+    ):
+        cdef cnp.ndarray arr = _coerce_data_array(data, True)
         cdef vector[int] leaf_col
-        leaf_col.assign(self.n_nodes, -1)
-        cdef size_t i
-        cdef int var
-        cdef int col
-        for i in range(self.n_nodes):
-            if self.kinds[i] == NODE_INPUT:
-                var = self.leaf_var[i]
-                if var_to_col is None:
-                    col = var
-                else:
-                    col = int(var_to_col[var])
-                if col < 0 or col >= n_cols:
-                    raise ValueError(
-                        f"variable {var} maps to column {col} out of range "
-                        f"[0, {n_cols})"
-                    )
-                leaf_col[i] = col
-        cdef object out = np.empty(n_rows, dtype=np.float64)
-        cdef double[::1] out_view = out
-        cdef const int[:, ::1] data_view = arr
-        self._score(data_view, leaf_col, out_view)
+        cdef Py_ssize_t n_rows
+        cdef Py_ssize_t n_cols
+        cdef object out
+        cdef double[::1] out_view
+        cdef const int[:, ::1] data_view
+        cdef vector[int] ev
+        cdef object val_arr
+        cdef double[::1] val
+        cdef double result
+        if arr.ndim == 1:
+            _build_evidence_vector(self, arr, ev)
+            val_arr = np.empty(self.n_nodes, dtype=np.float64)
+            val = val_arr
+            with nogil:
+                result = _flat_eval(self, ev.data(), log_space, val)
+            return result
+        n_rows = arr.shape[0]
+        n_cols = arr.shape[1]
+        _leaf_column_map(self, var_to_col, n_cols, leaf_col)
+        out = np.empty(n_rows, dtype=np.float64)
+        out_view = out
+        data_view = arr
+        self._score(data_view, leaf_col, out_view, log_space)
         return out
 
     cdef void _score(
@@ -585,6 +629,7 @@ cdef class CompiledCircuit:
         const int[:, ::1] data,
         const vector[int]& leaf_col,
         double[::1] out,
+        bint log_space,
     ) except *:
         cdef Py_ssize_t n_rows = data.shape[0]
         cdef Py_ssize_t r
@@ -616,49 +661,52 @@ cdef class CompiledCircuit:
                                     f"value {value} out of range [0, {card}) "
                                     f"in column {col}"
                                 )
-                        val[n] = self.leaf_logpmf_flat[self.leaf_pmf_off[n] + value]
+                        if log_space:
+                            val[n] = self.leaf_logpmf_flat[self.leaf_pmf_off[n] + value]
+                        else:
+                            val[n] = self.leaf_pmf_flat[self.leaf_pmf_off[n] + value]
                     elif kind == NODE_PRODUCT:
                         start = self.child_off[n]
                         stop = self.child_off[n + 1]
-                        acc = 0.0
-                        for k in range(start, stop):
-                            acc += val[self.children_flat[k]]
+                        if log_space:
+                            acc = 0.0
+                            for k in range(start, stop):
+                                acc += val[self.children_flat[k]]
+                        else:
+                            acc = 1.0
+                            for k in range(start, stop):
+                                acc *= val[self.children_flat[k]]
                         val[n] = acc
                     else:
                         start = self.child_off[n]
                         stop = self.child_off[n + 1]
-                        max_log = -INFINITY
-                        for k in range(start, stop):
-                            term = self.sum_logw_flat[k] + val[self.children_flat[k]]
-                            if term > max_log:
-                                max_log = term
-                        if not isfinite(max_log) or max_log == -INFINITY:
-                            val[n] = -INFINITY
-                        else:
-                            sum_exp = 0.0
+                        if log_space:
+                            max_log = -INFINITY
                             for k in range(start, stop):
                                 term = self.sum_logw_flat[k] + val[self.children_flat[k]]
-                                if isfinite(term) and term > -INFINITY:
-                                    sum_exp += exp(term - max_log)
-                            if sum_exp <= 0.0:
+                                if term > max_log:
+                                    max_log = term
+                            if not isfinite(max_log) or max_log == -INFINITY:
                                 val[n] = -INFINITY
                             else:
-                                val[n] = max_log + log(sum_exp)
+                                sum_exp = 0.0
+                                for k in range(start, stop):
+                                    term = self.sum_logw_flat[k] + val[self.children_flat[k]]
+                                    if isfinite(term) and term > -INFINITY:
+                                        sum_exp += exp(term - max_log)
+                                if sum_exp <= 0.0:
+                                    val[n] = -INFINITY
+                                else:
+                                    val[n] = max_log + log(sum_exp)
+                        else:
+                            acc = 0.0
+                            for k in range(start, stop):
+                                acc += self.sum_w_flat[k] * val[self.children_flat[k]]
+                            val[n] = acc
                 out[r] = val[self.root_index]
 
-    def likelihood(self, object assignment):
-        """Single-datapoint likelihood (flat nogil path)."""
-        cdef vector[int] ev
-        _build_evidence_vector(self, assignment, ev)
-        cdef object val_arr = np.empty(self.n_nodes, dtype=np.float64)
-        cdef double[::1] val = val_arr
-        cdef double result
-        with nogil:
-            result = _flat_eval(self, ev.data(), False, val)
-        return result
-
     def sample(self, Py_ssize_t n_samples, object seed=None):
-        """Draw samples (flat nogil path)."""
+        """Draw samples as a 2-D integer array of shape ``(n_samples, max_var+1)``."""
         if n_samples < 0:
             raise ValueError("n_samples must be non-negative")
         cdef unsigned long long rng_seed
@@ -668,31 +716,22 @@ cdef class CompiledCircuit:
             rng_seed = <unsigned long long>int(seed)
         cdef RandomState rng = RandomState(rng_seed)
         cdef size_t width = <size_t>(self.max_var + 1)
-        cdef vector[int] buf
+        cdef object out = np.full((n_samples, width), -1, dtype=np.int32)
+        cdef int[:, ::1] out_view = out
         cdef Py_ssize_t i
-        cdef size_t base
-        cdef int v
-        cdef dict row
-        cdef list results = []
         cdef size_t root_index = self.root_index
         if n_samples > 0:
-            buf.assign(<size_t>n_samples * width, -1)
             with nogil:
                 for i in range(n_samples):
-                    _flat_sample_node(self, root_index, rng, buf.data() + <size_t>i * width)
-            for i in range(n_samples):
-                base = <size_t>i * width
-                row = {}
-                for v in self.variables:
-                    if buf[base + <size_t>v] >= 0:
-                        row[v] = buf[base + <size_t>v]
-                results.append(row)
-        return results
+                    _flat_sample_node(
+                        self, root_index, rng, &out_view[i, 0]
+                    )
+        return out
 
-    def mean_log_likelihood_and_grad(self, object dataset):
+    def mean_log_likelihood_and_grad(self, object dataset, object var_to_col=None):
         """Mean log-likelihood and gradient over a dataset (flat nogil path)."""
         from sparc.grad import compiled_mean_log_likelihood_and_grad
-        return compiled_mean_log_likelihood_and_grad(self, dataset)
+        return compiled_mean_log_likelihood_and_grad(self, dataset, var_to_col)
 
     def cw_distance(self, other, double metric_p=1.0, double scale_factor=1.0, object metric=None):
         from sparc.queries.cw import cw_distance

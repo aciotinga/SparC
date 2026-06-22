@@ -38,10 +38,10 @@ def _structured_circuit():
 
 def _dataset(seed=0, n=25):
     rng = np.random.default_rng(seed)
-    return [
-        {0: int(rng.integers(0, 3)), 1: int(rng.integers(0, 2))}
-        for _ in range(n)
-    ]
+    data = np.zeros((n, 2), dtype=np.int32)
+    data[:, 0] = rng.integers(0, 3, size=n)
+    data[:, 1] = rng.integers(0, 2, size=n)
+    return data
 
 
 def _node_by_id(root, target):
@@ -93,7 +93,7 @@ def test_value_matches_average_log_likelihood():
 
     mean_ll, grads = mean_log_likelihood_and_grad(root, data)
 
-    ref = np.mean([pc.log_likelihood(x) for x in data])
+    ref = float(pc.compile().log_likelihood(data).mean())
     assert_allclose(mean_ll, ref, rtol=1e-12, atol=1e-12)
     assert_allclose(grads.value, ref, rtol=1e-12, atol=1e-12)
 
@@ -156,7 +156,7 @@ def test_categorical_gradients_match_finite_difference(node_id):
 def test_empty_dataset_raises():
     root = _structured_circuit()
     with pytest.raises(ValueError):
-        mean_log_likelihood_and_grad(root, [])
+        mean_log_likelihood_and_grad(root, np.zeros((0, 2), dtype=np.int32))
 
 
 def test_gradient_ascent_increases_likelihood():

@@ -112,8 +112,8 @@ def _downsample_and_binarize(images: np.ndarray, image_size: int) -> np.ndarray:
     return (flat >= 128.0).astype(np.int32)
 
 
-def rows_to_dataset(rows: np.ndarray) -> list[dict[int, int]]:
-    return [dict(enumerate(row.tolist())) for row in rows]
+def rows_to_dataset(rows: np.ndarray) -> np.ndarray:
+    return np.ascontiguousarray(rows, dtype=np.int32)
 
 
 def mean_log_likelihood(circuit, rows: np.ndarray) -> float:
@@ -122,24 +122,24 @@ def mean_log_likelihood(circuit, rows: np.ndarray) -> float:
 
 
 def plot_samples(
-    samples: list[dict[int, int]],
+    samples: np.ndarray,
     image_size: int,
     *,
     save_path: Path | None,
     show: bool,
 ) -> None:
     plt = _import_matplotlib()
-    n = len(samples)
+    n = samples.shape[0]
     cols = int(math.ceil(math.sqrt(n)))
     rows = int(math.ceil(n / cols))
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 1.6, rows * 1.6))
     axes = np.atleast_1d(axes).ravel()
     for ax, sample in zip(axes, samples):
-        img = np.array([sample[v] for v in range(image_size * image_size)], dtype=np.float32)
+        img = sample[: image_size * image_size].astype(np.float32)
         img = img.reshape(image_size, image_size)
         ax.imshow(img, cmap="gray", vmin=0.0, vmax=1.0)
         ax.axis("off")
-    for ax in axes[len(samples) :]:
+    for ax in axes[n:]:
         ax.axis("off")
     fig.suptitle("Samples from trained PC", fontsize=12)
     fig.tight_layout()

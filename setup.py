@@ -1,6 +1,7 @@
 import sys
 import sysconfig
 
+import numpy as np
 from Cython.Build import cythonize
 from setuptools import Extension, setup
 
@@ -9,6 +10,8 @@ if sys.platform == "win32" and "gcc" not in _cc.lower() and "clang" not in _cc.l
     extra_compile_args = ["/O2", "/std:c++17"]
 else:
     extra_compile_args = ["-O3", "-std=c++17"]
+
+_numpy_include = np.get_include()
 
 # Every Cython extension module in SparC. All are C++ (libcpp containers,
 # C++ <random>, etc.).
@@ -39,6 +42,7 @@ ext_modules = cythonize(
             name,
             [_to_path(name)],
             language="c++",
+            include_dirs=[_numpy_include],
             extra_compile_args=extra_compile_args,
         )
         for name in _pyx_modules

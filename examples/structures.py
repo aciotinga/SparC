@@ -29,9 +29,9 @@ def main():
     hmm = HMM(seq_length=8, num_latents=4, num_emits=3, seed=0)
     data = hmm.sample(400, seed=1)
     print("HMM mean LL of its own samples:",
-          float(np.mean([hmm.log_likelihood(x) for x in data])))
+          float(hmm.compile().log_likelihood(data).mean()))
 
-    batch = np.array([[x[v] for v in range(8)] for x in data])
+    batch = data[:, :8]
     print("HMM batched LL shape:", hmm.compile().log_likelihood(batch).shape)
 
     model = HMM(seq_length=8, num_latents=4, num_emits=3, seed=99)

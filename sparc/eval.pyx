@@ -8,12 +8,19 @@
 import time
 
 from libcpp.unordered_map cimport unordered_map
+from libcpp.unordered_set cimport unordered_set
 from libcpp.vector cimport vector
-from libc.math cimport exp, INFINITY, isfinite, log
 
 import numpy as np
+cimport numpy as cnp
 
-from sparc._graph cimport CompiledCircuit, graph_safe_log
+from sparc._graph cimport (
+    CompiledCircuit,
+    _coerce_data_array,
+    _flat_sample_node,
+    _leaf_column_map,
+    _max_var_from_scope,
+)
 from sparc._mathutils cimport sp_logsumexp, sp_safe_log
 from sparc.nodes cimport (
     CircuitNode,
@@ -32,43 +39,47 @@ from sparc.nodes cimport (
 from sparc._graph import CompiledCircuit
 
 
-cpdef object _compiled_query_impl(CompiledCircuit g, object assignment, bint log_space):
-    return _compiled_query(g, assignment, log_space)
-
-
-cpdef list _compiled_sample_impl(CompiledCircuit g, Py_ssize_t n_samples, object seed=None):
-    if n_samples < 0:
-        raise ValueError("n_samples must be non-negative")
-    cdef unsigned long long rng_seed
-    if seed is None:
-        rng_seed = <unsigned long long>time.time_ns()
-    else:
-        rng_seed = <unsigned long long>int(seed)
-    cdef RandomState rng = RandomState(rng_seed)
-    cdef size_t width = <size_t>(g.max_var + 1)
-    cdef vector[int] buf
-    cdef Py_ssize_t i
-    cdef size_t base
+cdef Evidence _evidence_from_row(
+    const int[:] row,
+    Py_ssize_t n_cols,
+    int max_var,
+    unordered_set[int]& scope,
+    object var_to_col,
+) except *:
+    cdef Evidence ev = Evidence.__new__(Evidence)
     cdef int v
-    cdef dict row
-    cdef list results = []
-    cdef size_t root_index = g.root_index
-    if n_samples > 0:
-        buf.assign(<size_t>n_samples * width, -1)
-        with nogil:
-            for i in range(n_samples):
-                _flat_sample_node(g, root_index, rng, buf.data() + <size_t>i * width)
-        for i in range(n_samples):
-            base = <size_t>i * width
-            row = {}
-            for v in g.variables:
-                if buf[base + <size_t>v] >= 0:
-                    row[v] = buf[base + <size_t>v]
-            results.append(row)
-    return results
+    cdef int col
+    cdef int val
+    cdef int card
+    ev.init_dense(max_var + 1)
+    if var_to_col is None:
+        if n_cols <= max_var:
+            raise ValueError(
+                f"assignment array length {n_cols} is shorter than required "
+                f"width {max_var + 1}"
+            )
+        for v in sorted(scope):
+            val = row[v]
+            if val < 0:
+                raise ValueError(f"outcome value must be non-negative, got {val}")
+            ev.set_var(v, val)
+    else:
+        for v in sorted(scope):
+            col = int(var_to_col[v])
+            if col < 0 or col >= n_cols:
+                raise ValueError(
+                    f"variable {v} maps to column {col} out of range "
+                    f"[0, {n_cols})"
+                )
+            val = row[col]
+            if val < 0:
+                raise ValueError(f"outcome value must be non-negative, got {val}")
+            ev.set_var(v, val)
+    ev.require_vars(scope)
+    return ev
 
 
-# --- Object-graph single-datapoint queries ------------------------------------
+# --- Object-graph queries -----------------------------------------------------
 
 cdef class _QueryContext:
     cdef Evidence evidence
@@ -138,9 +149,9 @@ cdef double _eval(CircuitNode node, _QueryContext ctx) except *:
     return result
 
 
-cdef double _run_query(CircuitNode root, object assignment, bint log_space) except *:
+cdef double _run_query_evidence(CircuitNode root, Evidence evidence, bint log_space) except *:
     cdef _QueryContext ctx = _QueryContext()
-    ctx.evidence = Evidence(assignment)
+    ctx.evidence = evidence
     ctx.log_space = log_space
     if root.scope.size() == 0:
         raise ValueError(
@@ -150,27 +161,45 @@ cdef double _run_query(CircuitNode root, object assignment, bint log_space) exce
     return _eval(root, ctx)
 
 
-cpdef double likelihood(CircuitNode root, object assignment) except *:
-    """Evaluate the probability of a single complete assignment (object-graph)."""
-    if root.scope.size() == 0:
-        raise ValueError(
-            "root scope is empty; call propagate_scope() on the circuit first"
+cdef object _likelihood_impl(
+    CircuitNode root, object data, object var_to_col, bint log_space
+):
+    cdef cnp.ndarray arr = _coerce_data_array(data, True)
+    cdef int max_var = _max_var_from_scope(root.scope)
+    cdef Py_ssize_t n_rows
+    cdef Py_ssize_t r
+    cdef Evidence ev
+    cdef object out
+    cdef double val
+    if arr.ndim == 1:
+        ev = _evidence_from_row(
+            arr, arr.shape[0], max_var, root.scope, var_to_col
         )
-    return _run_query(root, assignment, False)
+        return _run_query_evidence(root, ev, log_space)
+    n_rows = arr.shape[0]
+    out = np.empty(n_rows, dtype=np.float64)
+    for r in range(n_rows):
+        ev = _evidence_from_row(
+            arr[r], arr.shape[1], max_var, root.scope, var_to_col
+        )
+        val = _run_query_evidence(root, ev, log_space)
+        out[r] = val
+    return out
 
 
-cpdef double log_likelihood(CircuitNode root, object assignment) except *:
-    """Evaluate log-probability of a single assignment (object-graph)."""
-    if root.scope.size() == 0:
-        raise ValueError(
-            "root scope is empty; call propagate_scope() on the circuit first"
-        )
-    return _run_query(root, assignment, True)
+cpdef object likelihood(CircuitNode root, object data, object var_to_col=None):
+    """Evaluate likelihood for a 1-D or 2-D integer assignment array."""
+    return _likelihood_impl(root, data, var_to_col, False)
+
+
+cpdef object log_likelihood(CircuitNode root, object data, object var_to_col=None):
+    """Evaluate log-likelihood for a 1-D or 2-D integer assignment array."""
+    return _likelihood_impl(root, data, var_to_col, True)
 
 
 # --- Object-graph sampling ----------------------------------------------------
 
-cdef void _sample_node(CircuitNode node, RandomState rng, dict out) except *:
+cdef void _sample_node(CircuitNode node, RandomState rng, int* out) except *:
     cdef size_t i
     cdef size_t idx
     cdef double u
@@ -198,8 +227,8 @@ cdef void _sample_node(CircuitNode node, RandomState rng, dict out) except *:
         raise TypeError(f"unsupported node type for sampling: {type(node).__name__}")
 
 
-cpdef list sample(CircuitNode root, Py_ssize_t n_samples, object seed=None):
-    """Draw ancestral samples from a circuit (object-graph)."""
+cpdef cnp.ndarray sample(CircuitNode root, Py_ssize_t n_samples, object seed=None):
+    """Draw ancestral samples as a 2-D integer array."""
     if root.scope.size() == 0:
         raise ValueError(
             "root scope is empty; call propagate_scope() on the circuit first"
@@ -212,181 +241,11 @@ cpdef list sample(CircuitNode root, Py_ssize_t n_samples, object seed=None):
     else:
         rng_seed = <unsigned long long>int(seed)
     cdef RandomState rng = RandomState(rng_seed)
-    cdef list results = []
+    cdef int max_var = _max_var_from_scope(root.scope)
+    cdef size_t width = <size_t>(max_var + 1)
+    cdef object out = np.full((n_samples, width), -1, dtype=np.int32)
+    cdef int[:, ::1] out_view = out
     cdef Py_ssize_t i
-    cdef dict row
     for i in range(n_samples):
-        row = {}
-        _sample_node(root, rng, row)
-        results.append(row)
-    return results
-
-
-# --- CompiledCircuit flat helpers (used by grad and CompiledCircuit methods) --
-
-cdef void _build_evidence_vector(
-    CompiledCircuit g, object assignment, vector[int]& ev
-) except *:
-    cdef int max_var = g.max_var
-    cdef object key
-    cdef object value
-    cdef int var
-    cdef int outcome
-    cdef size_t n
-    cdef int v
-    cdef int val
-    cdef int card
-    ev.assign(max_var + 1, -1)
-    if isinstance(assignment, np.ndarray):
-        arr = np.asarray(assignment, dtype=np.int32).ravel()
-        if arr.size <= max_var:
-            raise ValueError(
-                f"assignment array length {arr.size} is shorter than required "
-                f"width {max_var + 1}"
-            )
-        for var in range(max_var + 1):
-            ev[var] = int(arr[var])
-    else:
-        for key, value in assignment.items():
-            var = int(key)
-            outcome = int(value)
-            if var < 0:
-                raise ValueError(f"variable index must be non-negative, got {var}")
-            if outcome < 0:
-                raise ValueError(f"outcome value must be non-negative, got {outcome}")
-            if var <= max_var:
-                ev[var] = outcome
-    for v in g.variables:
-        if ev[v] < 0:
-            raise ValueError(f"missing evidence for variable {v}")
-    for n in range(g.n_nodes):
-        if g.kinds[n] == NODE_INPUT:
-            v = g.leaf_var[n]
-            val = ev[v]
-            card = g.leaf_card[n]
-            if val < 0 or val >= card:
-                raise ValueError(
-                    f"evidence for variable {v}: outcome {val} out of range "
-                    f"[0, {card})"
-                )
-
-
-cdef double _flat_eval(
-    CompiledCircuit g, const int* ev, bint log_space, double[::1] val
-) noexcept nogil:
-    cdef size_t n
-    cdef size_t k
-    cdef size_t start
-    cdef size_t stop
-    cdef int kind
-    cdef int var
-    cdef int value
-    cdef double acc
-    cdef double max_log
-    cdef double sum_exp
-    cdef double term
-    for n in range(g.n_nodes):
-        kind = g.kinds[n]
-        if kind == NODE_INPUT:
-            var = g.leaf_var[n]
-            value = ev[var]
-            if log_space:
-                val[n] = g.leaf_logpmf_flat[g.leaf_pmf_off[n] + value]
-            else:
-                val[n] = g.leaf_pmf_flat[g.leaf_pmf_off[n] + value]
-        elif kind == NODE_PRODUCT:
-            start = g.child_off[n]
-            stop = g.child_off[n + 1]
-            if log_space:
-                acc = 0.0
-                for k in range(start, stop):
-                    acc += val[g.children_flat[k]]
-            else:
-                acc = 1.0
-                for k in range(start, stop):
-                    acc *= val[g.children_flat[k]]
-            val[n] = acc
-        else:
-            start = g.child_off[n]
-            stop = g.child_off[n + 1]
-            if log_space:
-                max_log = -INFINITY
-                for k in range(start, stop):
-                    term = g.sum_logw_flat[k] + val[g.children_flat[k]]
-                    if term > max_log:
-                        max_log = term
-                if not isfinite(max_log) or max_log == -INFINITY:
-                    val[n] = -INFINITY
-                else:
-                    sum_exp = 0.0
-                    for k in range(start, stop):
-                        term = g.sum_logw_flat[k] + val[g.children_flat[k]]
-                        if isfinite(term) and term > -INFINITY:
-                            sum_exp += exp(term - max_log)
-                    if sum_exp <= 0.0:
-                        val[n] = -INFINITY
-                    else:
-                        val[n] = max_log + log(sum_exp)
-            else:
-                acc = 0.0
-                for k in range(start, stop):
-                    acc += g.sum_w_flat[k] * val[g.children_flat[k]]
-                val[n] = acc
-    return val[g.root_index]
-
-
-cdef double _compiled_query(CompiledCircuit g, object assignment, bint log_space) except *:
-    cdef vector[int] ev
-    _build_evidence_vector(g, assignment, ev)
-    cdef object val_arr = np.empty(g.n_nodes, dtype=np.float64)
-    cdef double[::1] val = val_arr
-    cdef double result
-    with nogil:
-        result = _flat_eval(g, ev.data(), log_space, val)
-    return result
-
-
-cdef void _flat_sample_node(
-    CompiledCircuit g, size_t n, RandomState rng, int* out
-) noexcept nogil:
-    cdef int kind = g.kinds[n]
-    cdef size_t start
-    cdef size_t stop
-    cdef size_t k
-    cdef size_t idx
-    cdef size_t off
-    cdef double u
-    cdef double cum
-    cdef int var
-    cdef int value
-    cdef int card
-    if kind == NODE_INPUT:
-        var = g.leaf_var[n]
-        card = g.leaf_card[n]
-        off = g.leaf_pmf_off[n]
-        u = rng.next_double()
-        cum = 0.0
-        value = card - 1
-        for k in range(<size_t>card):
-            cum += g.leaf_pmf_flat[off + k]
-            if u < cum:
-                value = <int>k
-                break
-        out[var] = value
-    elif kind == NODE_PRODUCT:
-        start = g.child_off[n]
-        stop = g.child_off[n + 1]
-        for k in range(start, stop):
-            _flat_sample_node(g, g.children_flat[k], rng, out)
-    else:
-        start = g.child_off[n]
-        stop = g.child_off[n + 1]
-        u = rng.next_double()
-        cum = 0.0
-        idx = g.children_flat[stop - 1]
-        for k in range(start, stop):
-            cum += g.sum_w_flat[k]
-            if u < cum:
-                idx = g.children_flat[k]
-                break
-        _flat_sample_node(g, idx, rng, out)
+        _sample_node(root, rng, &out_view[i, 0])
+    return out

@@ -12,9 +12,16 @@ from libcpp.vector cimport vector
 from libc.math cimport exp, INFINITY, isfinite, log
 
 import numpy as np
+cimport numpy as cnp
 
-from sparc._graph cimport CompiledCircuit
+from sparc._graph cimport (
+    CompiledCircuit,
+    _coerce_data_array,
+    _leaf_column_map,
+    _max_var_from_scope,
+)
 from sparc._mathutils cimport sp_logsumexp, sp_safe_log
+from sparc.eval cimport _evidence_from_row
 from sparc.nodes cimport (
     BernoulliInputNode,
     CategoricalInputNode,
@@ -139,9 +146,6 @@ cdef class _LLGradContext:
         cdef int value
         cdef double p_v
         cdef object arr
-        # Only leaves whose parameters live on a probability simplex are
-        # trainable through this path (categorical and bernoulli). Deterministic
-        # or shape-parameterized leaves contribute no parameter gradient.
         if not (isinstance(node, CategoricalInputNode)
                 or isinstance(node, BernoulliInputNode)):
             return
@@ -182,13 +186,16 @@ cdef class _LLGradContext:
             if child_ll > NEG_INF:
                 arr[i] += bar * exp(child_ll - ll)
 
-    cdef tuple solve_dataset(self, CircuitNode root, list dataset):
-        cdef Py_ssize_t n = len(dataset)
+    cdef tuple solve_dataset(
+        self, CircuitNode root, cnp.ndarray arr, object var_to_col
+    ):
+        cdef Py_ssize_t n = arr.shape[0]
         cdef Py_ssize_t idx
         cdef double total_ll = 0.0
         cdef double inv_n
         cdef double ll
         cdef GradBundle grads
+        cdef int max_var = _max_var_from_scope(root.scope)
         if root.scope.size() == 0:
             raise ValueError(
                 "root scope is empty; call propagate_scope() on the circuit first"
@@ -197,8 +204,9 @@ cdef class _LLGradContext:
             raise ValueError("dataset must contain at least one datapoint")
         inv_n = 1.0 / <double>n
         for idx in range(n):
-            self.evidence = Evidence(dataset[idx])
-            self.evidence.require_vars(root.scope)
+            self.evidence = _evidence_from_row(
+                arr[idx], arr.shape[1], max_var, root.scope, var_to_col
+            )
             self._reset()
             ll = self._forward(root)
             total_ll += ll
@@ -214,54 +222,11 @@ cdef class _LLGradContext:
 
 # --- Flattened nogil gradient path --------------------------------------------
 
-cdef void _build_grad_matrix(
-    CompiledCircuit g, list dataset, vector[int]& mat, Py_ssize_t n_rows
-) except *:
-    """Dense (n_rows x width) evidence matrix with object-path validation."""
-    cdef size_t width = <size_t>(g.max_var + 1)
-    cdef Py_ssize_t r
-    cdef object dp
-    cdef object key
-    cdef object value
-    cdef int var
-    cdef int outcome
-    cdef size_t base
-    cdef size_t n
-    cdef int v
-    cdef int val
-    cdef int card
-    mat.assign(<size_t>n_rows * width, -1)
-    for r in range(n_rows):
-        dp = dataset[r]
-        base = <size_t>r * width
-        for key, value in dp.items():
-            var = int(key)
-            outcome = int(value)
-            if var < 0:
-                raise ValueError(f"variable index must be non-negative, got {var}")
-            if outcome < 0:
-                raise ValueError(f"outcome value must be non-negative, got {outcome}")
-            if var <= g.max_var:
-                mat[base + <size_t>var] = outcome
-        for n in range(g.n_nodes):
-            if g.kinds[n] == NODE_INPUT:
-                v = g.leaf_var[n]
-                val = mat[base + <size_t>v]
-                card = g.leaf_card[n]
-                if val < 0:
-                    raise ValueError(f"missing evidence for variable {v}")
-                if val >= card:
-                    raise ValueError(
-                        f"evidence for variable {v}: outcome {val} out of range "
-                        f"[0, {card})"
-                    )
-
-
 cdef void _flat_grad_core(
     CompiledCircuit g,
-    const int* mat,
+    const int[:, ::1] data,
+    const vector[int]& leaf_col,
     Py_ssize_t n_rows,
-    size_t width,
     double* val,
     double* adj,
     double* sum_pool,
@@ -275,11 +240,10 @@ cdef void _flat_grad_core(
     cdef size_t k
     cdef size_t start
     cdef size_t stop
-    cdef size_t base
     cdef size_t off
     cdef size_t child
     cdef int kind
-    cdef int var
+    cdef int col
     cdef int value
     cdef double acc
     cdef double max_log
@@ -292,13 +256,11 @@ cdef void _flat_grad_core(
     cdef double p_v
     cdef double total = 0.0
     for r in range(n_rows):
-        base = <size_t>r * width
-        # Forward (log-space), filling val[].
         for n in range(g.n_nodes):
             kind = g.kinds[n]
             if kind == NODE_INPUT:
-                var = g.leaf_var[n]
-                value = mat[base + <size_t>var]
+                col = leaf_col[n]
+                value = data[r, col]
                 val[n] = g.leaf_logpmf_flat[g.leaf_pmf_off[n] + <size_t>value]
             elif kind == NODE_PRODUCT:
                 start = g.child_off[n]
@@ -330,7 +292,6 @@ cdef void _flat_grad_core(
         total += val[g.root_index]
         if val[g.root_index] <= -INFINITY:
             continue
-        # Reverse-mode backward over the post-order (parents before children).
         for n in range(g.n_nodes):
             adj[n] = 0.0
         adj[g.root_index] = inv_n
@@ -342,8 +303,8 @@ cdef void _flat_grad_core(
             kind = g.kinds[n]
             if kind == NODE_INPUT:
                 if g.leaf_trainable[n]:
-                    var = g.leaf_var[n]
-                    value = mat[base + <size_t>var]
+                    col = leaf_col[n]
+                    value = data[r, col]
                     off = g.leaf_pmf_off[n]
                     p_v = g.leaf_pmf_flat[off + <size_t>value]
                     if p_v > 0.0:
@@ -370,14 +331,15 @@ cdef void _flat_grad_core(
     total_ll_out[0] = total
 
 
-cdef tuple _flat_solve_dataset(CompiledCircuit g, list dataset):
-    cdef Py_ssize_t n = len(dataset)
+cdef tuple _flat_solve_dataset(
+    CompiledCircuit g, cnp.ndarray arr, object var_to_col
+):
+    cdef Py_ssize_t n = arr.shape[0]
     if n == 0:
         raise ValueError("dataset must contain at least one datapoint")
     cdef double inv_n = 1.0 / <double>n
-    cdef size_t width = <size_t>(g.max_var + 1)
-    cdef vector[int] mat
-    _build_grad_matrix(g, dataset, mat, n)
+    cdef vector[int] leaf_col
+    _leaf_column_map(g, var_to_col, arr.shape[1], leaf_col)
 
     cdef vector[double] val
     cdef vector[double] adj
@@ -388,9 +350,10 @@ cdef tuple _flat_solve_dataset(CompiledCircuit g, list dataset):
     sum_pool.assign(g.children_flat.size(), 0.0)
     cat_pool.assign(g.leaf_pmf_flat.size(), 0.0)
     cdef double total_ll = 0.0
+    cdef const int[:, ::1] data_view = arr
     with nogil:
         _flat_grad_core(
-            g, mat.data(), n, width,
+            g, data_view, leaf_col, n,
             val.data(), adj.data(), sum_pool.data(), cat_pool.data(),
             inv_n, &total_ll,
         )
@@ -405,56 +368,40 @@ cdef tuple _flat_solve_dataset(CompiledCircuit g, list dataset):
     cdef size_t off
     cdef size_t k
     cdef int card
-    cdef object arr
+    cdef object out_arr
     for nn in range(g.n_nodes):
         if g.kinds[nn] == NODE_SUM:
             start = g.child_off[nn]
             stop = g.child_off[nn + 1]
-            arr = np.empty(stop - start, dtype=np.float64)
+            out_arr = np.empty(stop - start, dtype=np.float64)
             for k in range(start, stop):
-                arr[k - start] = sum_pool[k]
-            sum_grads[g.node_ids[nn]] = arr
+                out_arr[k - start] = sum_pool[k]
+            sum_grads[g.node_ids[nn]] = out_arr
         elif g.kinds[nn] == NODE_INPUT and g.leaf_trainable[nn]:
             off = g.leaf_pmf_off[nn]
             card = g.leaf_card[nn]
-            arr = np.empty(card, dtype=np.float64)
+            out_arr = np.empty(card, dtype=np.float64)
             for k in range(<size_t>card):
-                arr[k] = cat_pool[off + k]
-            cat_grads[g.node_ids[nn]] = arr
+                out_arr[k] = cat_pool[off + k]
+            cat_grads[g.node_ids[nn]] = out_arr
     grads.sum_grads = sum_grads
     grads.cat_grads = cat_grads
     return (grads.value, grads)
 
 
-def mean_log_likelihood_and_grad(CircuitNode root, object dataset):
+def mean_log_likelihood_and_grad(CircuitNode root, object dataset, object var_to_col=None):
     """Mean log-likelihood and gradient (object-graph path)."""
-    cdef list data = list(dataset)
+    cdef cnp.ndarray arr = _coerce_data_array(dataset, False)
     if root.scope.size() == 0:
         raise ValueError(
             "root scope is empty; call propagate_scope() on the circuit first"
         )
-    return _LLGradContext().solve_dataset(root, data)
+    return _LLGradContext().solve_dataset(root, arr, var_to_col)
 
 
-def compiled_mean_log_likelihood_and_grad(CompiledCircuit g, object dataset):
+def compiled_mean_log_likelihood_and_grad(
+    CompiledCircuit g, object dataset, object var_to_col=None
+):
     """Mean log-likelihood and gradient (flat nogil path)."""
-    cdef Py_ssize_t n_rows
-    cdef Py_ssize_t r
-    cdef list data
-    cdef object row
-    cdef int c
-    cdef Py_ssize_t n_cols
-    if isinstance(dataset, np.ndarray):
-        if dataset.ndim != 2:
-            raise ValueError("dataset array must be 2-D (n_samples, n_columns)")
-        n_rows = dataset.shape[0]
-        n_cols = dataset.shape[1]
-        data = []
-        for r in range(n_rows):
-            row = {}
-            for c in range(n_cols):
-                row[c] = int(dataset[r, c])
-            data.append(row)
-        return _flat_solve_dataset(g, data)
-    data = list(dataset)
-    return _flat_solve_dataset(g, data)
+    cdef cnp.ndarray arr = _coerce_data_array(dataset, False)
+    return _flat_solve_dataset(g, arr, var_to_col)

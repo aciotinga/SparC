@@ -32,7 +32,7 @@ from sparc import Circuit, CategoricalInputNode, SumNode, ProductNode
 
 x = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.7, 0.3])
 root = SumNode(id=1, children=[x], parameters=[1.0])
-Circuit(root).log_likelihood({0: 0})
+Circuit(root).log_likelihood(np.array([0], dtype=np.int32))
 ```
 
 ## Building documentation locally

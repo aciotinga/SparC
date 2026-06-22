@@ -17,13 +17,14 @@ cdef class RandomState:
     cdef double next_double(self) noexcept nogil
 
 cdef class Evidence:
-    cdef unordered_map[int, int] _values
+    cdef vector[int] _buf
 
     cdef int get(self, int var) except *
     cdef bint has(self, int var) noexcept
     cdef void require_vars(self, unordered_set[int]& scope_vars) except *
     cdef void validate_value(self, int var, int value, Py_ssize_t cardinality) except *
-    cpdef void update_from_mapping(self, object assignment) except *
+    cdef void init_dense(self, int width) except *
+    cdef void set_var(self, int var, int value) noexcept
 
 cdef class CircuitNode:
     cdef readonly size_t id
@@ -63,7 +64,7 @@ cdef class ProductNode(InternalNode):
 
 cdef class InputNode(CircuitNode):
     cdef double prob_c(self, Evidence ev) except *
-    cdef void sample_into_c(self, RandomState rng, dict out) except *
+    cdef void sample_into_c(self, RandomState rng, int* out) except *
 
 cdef class FiniteDiscreteInputNode(InputNode):
     cdef size_t support_size(self) noexcept

@@ -48,4 +48,5 @@ The flattened representation stores:
 | Before | After |
 |--------|-------|
 | `circuit.batched_log_likelihood(data)` | `circuit.compile().log_likelihood(data)` |
-| Silent flat path on `circuit.log_likelihood(dict)` | Object-graph only; use `compiled.likelihood(...)` for speed |
+| Dict evidence `{var: value}` | 1D `np.ndarray` (index = variable id); 2D batches for vectorized eval |
+| `sample()` returned list of dicts | `sample()` returns `(n, max_var+1)` int32 ndarray |

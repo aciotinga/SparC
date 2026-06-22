@@ -187,16 +187,17 @@ class MLETrainer:
         self.method = method
         self.prob_floor = prob_floor
 
-    def step(self, dataset: Iterable[Dict[int, int]]) -> float:
+    def step(self, dataset: np.ndarray) -> float:
         """Run one ascent step over ``dataset``.
 
         Args:
-            dataset: Iterable of ``{var: value}`` assignment dicts.
+            dataset: 2-D integer array ``(n_samples, n_columns)`` of complete
+                assignments.
 
         Returns:
             Mean log-likelihood before the parameter update.
         """
-        mean_ll, grads = self.circuit.mean_log_likelihood_and_grad(list(dataset))
+        mean_ll, grads = self.circuit.mean_log_likelihood_and_grad(dataset)
         apply_grads(
             self.circuit, grads, self.lr,
             ascent=True, method=self.method, prob_floor=self.prob_floor,
@@ -205,7 +206,7 @@ class MLETrainer:
 
     def fit(
         self,
-        dataset: Iterable[Dict[int, int]],
+        dataset: np.ndarray,
         *,
         epochs: int = 100,
         callback=None,
@@ -213,7 +214,8 @@ class MLETrainer:
         """Run ``epochs`` projected gradient ascent steps.
 
         Args:
-            dataset: Iterable of ``{var: value}`` assignment dicts.
+            dataset: 2-D integer array ``(n_samples, n_columns)`` of complete
+                assignments.
             epochs: Number of optimization steps.
             callback: Optional ``callback(epoch, mean_ll)`` invoked after each
                 step with the pre-update mean log-likelihood.
@@ -221,7 +223,7 @@ class MLETrainer:
         Returns:
             List of mean log-likelihoods recorded before each step.
         """
-        data = list(dataset)
+        data = np.ascontiguousarray(dataset, dtype=np.int32)
         history: List[float] = []
         for epoch in range(epochs):
             mean_ll = self.step(data)

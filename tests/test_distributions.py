@@ -19,11 +19,12 @@ from sparc import (
     cw_distance,
     likelihood,
 )
+from tests.sparc_helpers import assignment_array
 
 
 def _leaf_pmf(node, card):
     node.propagate_scope()
-    return [likelihood(node, {0: k}) for k in range(card)]
+    return [likelihood(node, np.array([k], dtype=np.int32)) for k in range(card)]
 
 
 def test_bernoulli_pmf_and_sampling():
@@ -31,7 +32,7 @@ def test_bernoulli_pmf_and_sampling():
     assert _leaf_pmf(node, 2) == pytest.approx([0.7, 0.3])
     assert node.p() == pytest.approx(0.3)
     samples = Circuit(node).sample(2000, seed=0)
-    mean = np.mean([s[0] for s in samples])
+    mean = np.mean(samples[:, 0])
     assert mean == pytest.approx(0.3, abs=0.05)
 
 
@@ -70,8 +71,8 @@ def test_leaf_clone_roundtrip(node):
     clone = Circuit(node).clone().root
     assert type(clone) is type(node)
     card = node.cardinality()
-    a = [likelihood(node, {0: k}) for k in range(card)]
-    b = [likelihood(clone, {0: k}) for k in range(card)]
+    a = [likelihood(node, np.array([k], dtype=np.int32)) for k in range(card)]
+    b = [likelihood(clone, np.array([k], dtype=np.int32)) for k in range(card)]
     assert a == pytest.approx(b)
     assert clone is not node
 
@@ -96,9 +97,9 @@ def test_leaf_serializer_roundtrip(leaf_a, leaf_b):
     for original, copy in zip([leaf_a, leaf_b], prod.children()):
         assert type(copy) is type(original)
         card = original.cardinality()
-        a = [likelihood(original, {original_var: k})
-             for original_var, k in zip([original.scope_as_list()[0]] * card, range(card))]
-        b = [likelihood(copy, {copy.scope_as_list()[0]: k}) for k in range(card)]
+        var = original.scope_as_list()[0]
+        a = [likelihood(original, assignment_array({var: k})) for k in range(card)]
+        b = [likelihood(copy, assignment_array({var: k})) for k in range(card)]
         assert a == pytest.approx(b)
 
 

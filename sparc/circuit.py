@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Union
 
+import numpy as np
+
 from sparc.nodes import (
     BernoulliInputNode,
     CategoricalInputNode,
@@ -75,37 +77,51 @@ class Circuit:
         if not root.scope_as_list():
             root.propagate_scope()
 
-    def likelihood(self, assignment: dict[int, int]) -> float:
-        """Evaluate the probability of a single complete assignment.
+    def likelihood(self, data: np.ndarray, var_to_col: Optional[dict[int, int]] = None):
+        """Evaluate likelihood for a 1-D or 2-D integer assignment array.
 
         Args:
-            assignment: Mapping from variable index to observed value.
+            data: 1-D array (index ``i`` = value for variable ``i``) or 2-D
+                batch ``(n_samples, n_columns)``.
+            var_to_col: Optional mapping from variable index to column index
+                for 2-D batches (default: column ``i`` holds variable ``i``).
 
         Returns:
-            The likelihood :math:`P(\\mathbf{x})`.
+            A scalar if ``data`` is 1-D, otherwise an array of shape
+            ``(n_samples,)``.
         """
         from sparc.eval import likelihood
 
-        return likelihood(self.root, assignment)
+        return likelihood(self.root, data, var_to_col)
 
-    def log_likelihood(self, assignment: dict[int, int]) -> float:
-        """Evaluate the log-probability of a single complete assignment.
+    def log_likelihood(self, data: np.ndarray, var_to_col: Optional[dict[int, int]] = None):
+        """Evaluate log-likelihood for a 1-D or 2-D integer assignment array.
 
         Args:
-            assignment: Mapping from variable index to observed value.
+            data: 1-D array (index ``i`` = value for variable ``i``) or 2-D
+                batch ``(n_samples, n_columns)``.
+            var_to_col: Optional mapping from variable index to column index
+                for 2-D batches (default: column ``i`` holds variable ``i``).
 
         Returns:
-            The log-likelihood :math:`\\log P(\\mathbf{x})`.
+            A scalar if ``data`` is 1-D, otherwise an array of shape
+            ``(n_samples,)``.
         """
         from sparc.eval import log_likelihood
 
-        return log_likelihood(self.root, assignment)
+        return log_likelihood(self.root, data, var_to_col)
 
-    def mean_log_likelihood_and_grad(self, dataset):
+    def mean_log_likelihood_and_grad(
+        self,
+        dataset: np.ndarray,
+        var_to_col: Optional[dict[int, int]] = None,
+    ):
         """Mean log-likelihood over a dataset and its gradient.
 
         Args:
-            dataset: Iterable of ``{var: value}`` dicts, one per datapoint.
+            dataset: 2-D integer array ``(n_samples, n_columns)``.
+            var_to_col: Optional mapping from variable index to column index
+                (default: column ``i`` holds variable ``i``).
 
         Returns:
             A pair ``(mean_ll, grads)`` where ``mean_ll`` is the average
@@ -115,9 +131,9 @@ class Circuit:
         """
         from sparc.grad import mean_log_likelihood_and_grad
 
-        return mean_log_likelihood_and_grad(self.root, dataset)
+        return mean_log_likelihood_and_grad(self.root, dataset, var_to_col)
 
-    def sample(self, n_samples: int, seed: Optional[int] = None) -> list[dict[int, int]]:
+    def sample(self, n_samples: int, seed: Optional[int] = None) -> np.ndarray:
         """Draw ancestral samples from the circuit.
 
         Args:
@@ -125,7 +141,9 @@ class Circuit:
             seed: Optional RNG seed for reproducibility.
 
         Returns:
-            A list of ``{var: value}`` assignment dicts, one per sample.
+            Integer array of shape ``(n_samples, max_var + 1)`` where index
+            ``i`` holds the sampled value for variable ``i`` (``-1`` if not in
+            scope).
         """
         from sparc.eval import sample
 

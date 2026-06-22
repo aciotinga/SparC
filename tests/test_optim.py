@@ -21,7 +21,7 @@ from sparc.optim import (
     iter_nodes,
     simplex_step,
 )
-from tests.sparc_helpers import assert_on_simplex, project_to_simplex_tangent
+from tests.sparc_helpers import assert_on_simplex, assignment_array, project_to_simplex_tangent
 
 pytestmark = pytest.mark.optim
 
@@ -68,9 +68,8 @@ class TestApplyGrads:
         root = SumNode(id=2, children=[leaf_a, leaf_b], parameters=[0.6, 0.4])
         circuit = Circuit(root)
         before_b = leaf_b.probabilities_list()
-        _, grads = mean_log_likelihood_and_grad(
-            root, [{0: 0}, {0: 1}, {0: 0}]
-        )
+        data = np.array([[0], [1], [0]], dtype=np.int32)
+        _, grads = mean_log_likelihood_and_grad(root, data)
         # Drop cat grad for leaf_b
         grads.cat_grads.pop(1, None)
         apply_grads(circuit, grads, lr=0.1, ascent=True)
@@ -127,7 +126,7 @@ class TestMLETrainer:
     def test_euclidean_method_runs(self):
         leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
         circuit = Circuit(leaf)
-        data = [{0: 0}, {0: 1}, {0: 0}]
+        data = np.array([[0], [1], [0]], dtype=np.int32)
         trainer = MLETrainer(circuit, lr=0.1, method="euclidean")
         ll = trainer.step(data)
         assert np.isfinite(ll)

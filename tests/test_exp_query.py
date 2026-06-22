@@ -65,8 +65,10 @@ def _brute_force_inner_product(circ1, circ2):
         for v in vars_
     ]
     for assignment_tuple in itertools.product(*ranges):
-        assignment = {v: val for v, val in zip(vars_, assignment_tuple)}
-        total += likelihood(circ1, assignment) * likelihood(circ2, assignment)
+        row = np.zeros(max(vars_) + 1, dtype=np.int32)
+        for v, val in zip(vars_, assignment_tuple):
+            row[v] = val
+        total += likelihood(circ1, row) * likelihood(circ2, row)
     return total
 
 

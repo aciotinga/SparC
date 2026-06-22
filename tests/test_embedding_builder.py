@@ -11,8 +11,12 @@ from sparc.builders import (
 )
 
 
-def _full_assignment(scope_vars, num_categories: int) -> dict[int, int]:
-    return {v: 0 for v in scope_vars}
+def _full_assignment(scope_vars):
+    width = max(scope_vars) + 1
+    row = np.full(width, -1, dtype=np.int32)
+    for v in scope_vars:
+        row[v] = 0
+    return row
 
 
 def test_region_embedding_builder_categorical():
@@ -37,7 +41,7 @@ def test_region_embedding_builder_categorical():
 
     scope = circuit.root.scope_as_list()
     assert len(scope) == num_vars
-    assignment = _full_assignment(scope, 5)
+    assignment = _full_assignment(scope)
     ll = circuit.likelihood(assignment)
     log_ll = circuit.log_likelihood(assignment)
     assert ll > 0.0
@@ -63,7 +67,7 @@ def test_region_embedding_builder_binomial():
     ).build()
 
     scope = circuit.root.scope_as_list()
-    assignment = _full_assignment(scope, 4)
+    assignment = _full_assignment(scope)
     assert circuit.likelihood(assignment) > 0.0
 
 
@@ -108,7 +112,7 @@ def test_embedding_builder_categorical():
 
     scope = set(circuit.root.scope_as_list())
     assert scope == set(range(num_vars))
-    assignment = _full_assignment(scope, 4)
+    assignment = _full_assignment(scope)
     assert circuit.likelihood(assignment) > 0.0
 
 
@@ -127,5 +131,5 @@ def test_embedding_builder_with_reuse():
         alpha=1.0,
     ).build()
 
-    assignment = _full_assignment(circuit.root.scope_as_list(), 3)
+    assignment = _full_assignment(circuit.root.scope_as_list())
     assert math.isfinite(circuit.log_likelihood(assignment))

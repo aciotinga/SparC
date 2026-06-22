@@ -23,6 +23,7 @@ from sparc import (
 )
 from sparc.builders import EmbeddingBuilder, RandomRegionGraph, RegionEmbeddingBuilder
 from sparc.optim import MLETrainer, apply_grads, simplex_step
+from tests.sparc_helpers import assignment_array
 
 
 def _single_var_sum(ids, scope_var, probs_list, params):
@@ -61,10 +62,7 @@ class TestBatchedVsDict:
         data = np.random.randint(0, 4, size=(32, nvars)).astype(np.int32)
 
         batched = circuit.compile().log_likelihood(data)
-        per_row = np.array(
-            [circuit.log_likelihood({v: int(data[i, v]) for v in range(nvars)})
-             for i in range(data.shape[0])]
-        )
+        per_row = np.array([circuit.log_likelihood(data[i]) for i in range(data.shape[0])])
         assert_allclose(batched, per_row, rtol=0, atol=1e-10)
 
 
@@ -76,12 +74,12 @@ class TestClone:
         circuit = Circuit(root)
         clone = circuit.clone()
 
-        before = circuit.likelihood({0: 0})
+        before = circuit.likelihood(assignment_array({0: 0}))
         # mutate the clone's sum parameters
         clone.root.set_parameters_list([0.1, 0.9])
-        after = circuit.likelihood({0: 0})
+        after = circuit.likelihood(assignment_array({0: 0}))
         assert before == after  # original untouched
-        assert clone.likelihood({0: 0}) != after
+        assert clone.likelihood(assignment_array({0: 0})) != after
 
     def test_clone_preserves_values(self):
         np.random.seed(1)
@@ -91,7 +89,8 @@ class TestClone:
             sum_concentration=1.0, sum_reuse_probability=0.3,
             prod_reuse_probability=0.3, input_distribution="categorical", alpha=1.0,
         ).build()
-        asg = {v: 0 for v in circuit.root.scope_as_list()}
+        width = max(circuit.root.scope_as_list()) + 1
+        asg = np.zeros(width, dtype=np.int32)
         assert_allclose(circuit.clone().log_likelihood(asg),
                         circuit.log_likelihood(asg), rtol=0, atol=1e-12)
 
@@ -141,9 +140,9 @@ class TestMLE:
 class TestGCWCouplingCircuit:
     def _empirical_marginal(self, draws, var, n_outcomes):
         counts = np.zeros(n_outcomes)
-        for row in draws:
-            counts[row[var]] += 1
-        return counts / len(draws)
+        for r in range(draws.shape[0]):
+            counts[draws[r, var]] += 1
+        return counts / draws.shape[0]
 
     def test_leaf_coupling_marginals(self):
         p = [0.3, 0.7]
@@ -176,8 +175,8 @@ class TestGCWCouplingCircuit:
         draws = coupling.sample(40000, seed=1)
         assert_allclose(self._empirical_marginal(draws, 0, 2), p_marg, atol=0.02)
         assert_allclose(self._empirical_marginal(draws, 1, 2), q_marg, atol=0.02)
-        for row in draws[:50]:
-            assert coupling.likelihood(row) > 0.0
+        for r in range(50):
+            assert coupling.likelihood(draws[r]) > 0.0
 
     def test_product_coupling_disjoint_vars(self):
         circ1 = ProductNode(
@@ -198,8 +197,9 @@ class TestGCWCouplingCircuit:
         # circ1 has vars {0,1}; circ2 shifted by 2 -> {2,3}
         assert set(coupling.root.scope_as_list()) == {0, 1, 2, 3}
         draws = coupling.sample(2000, seed=2)
-        for row in draws[:50]:
-            assert set(row.keys()) == {0, 1, 2, 3}
+        for r in range(50):
+            row = draws[r]
+            assert (row[[0, 1, 2, 3]] >= 0).all()
 
 
 class TestDROSmoke:

@@ -24,8 +24,9 @@ circuit = Circuit(root)
 ## Inference
 
 ```python
-circuit.log_likelihood({0: 0, 1: 1})   # single datapoint
-circuit.likelihood({0: 0, 1: 1})
+point = np.array([0, 1], dtype=np.int32)
+circuit.log_likelihood(point)   # scalar
+circuit.likelihood(point)
 
 # Vectorized log-likelihood: rows = datapoints, cols = variables
 data = np.random.randint(0, 2, size=(1000, 2)).astype(np.int32)
@@ -35,8 +36,8 @@ circuit.compile().log_likelihood(data)
 ## Sampling
 
 ```python
-samples = circuit.sample(5, seed=0)
-# [{0: 0, 1: 1}, ...]
+samples = circuit.sample(5, seed=0)  # shape (5, max_var+1), int32
+# samples[i, var] is the outcome for variable var; -1 where out of scope
 ```
 
 ## Save and load

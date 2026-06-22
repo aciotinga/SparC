@@ -8,8 +8,8 @@ be added without editing existing query code.
 1. Subclass [`InputNode`][sparc.nodes.InputNode] for likelihood and sampling
    only, or [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode]
    to also support CW/GCW/expectation queries.
-2. Override the `cdef` hooks: `prob_c`, `sample_into_c`, and (for finite
-   discrete) `support_size`, `pmf_at`, `scope_var_c`.
+2. Override the `cdef` hooks: `prob_c`, `sample_into_c(self, rng, int* out)`, and (for finite
+   discrete) `support_size`, `pmf_at`, `scope_var_c`. Sampling writes `out[scope_var] = value`.
 3. Register cloning in [`circuit._clone_node`][sparc.circuit] if you use
    [`Circuit.clone`][sparc.circuit.Circuit.clone].
 4. Add serializer support in [`CircuitSerializer`][sparc.io.serializer.CircuitSerializer]

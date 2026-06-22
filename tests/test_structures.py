@@ -23,14 +23,11 @@ from sparc.structures import (
 )
 
 
-def _full_assignment(scope):
-    return {v: 0 for v in scope}
-
-
 def _enumerate_ll_sum(circuit, num_vars, num_states):
     total = 0.0
     for combo in itertools.product(range(num_states), repeat=num_vars):
-        total += likelihood(circuit.root, dict(enumerate(combo)))
+        row = np.array(combo, dtype=np.int32)
+        total += likelihood(circuit.root, row)
     return total
 
 
@@ -39,7 +36,7 @@ def test_hmm_builds_and_normalizes():
     assert set(circuit.root.scope_as_list()) == set(range(4))
     assert _enumerate_ll_sum(circuit, 4, 2) == pytest.approx(1.0)
     sample = circuit.sample(1, seed=1)[0]
-    assert set(sample.keys()) == set(range(4))
+    assert (sample[range(4)] >= 0).all()
     assert math.isfinite(circuit.log_likelihood(sample))
 
 
@@ -127,10 +124,9 @@ def test_different_structures_positive_cw():
 def test_structure_batched_log_likelihood():
     circuit = HMM(seq_length=6, num_latents=3, num_emits=3, seed=0)
     samples = circuit.sample(20, seed=1)
-    batch = np.array([[s[v] for v in range(6)] for s in samples])
-    batched = circuit.compile().log_likelihood(batch)
+    batched = circuit.compile().log_likelihood(samples)
     assert batched.shape == (20,)
-    single = np.array([circuit.log_likelihood(s) for s in samples])
+    single = np.array([circuit.log_likelihood(samples[r]) for r in range(20)])
     assert batched == pytest.approx(single, abs=1e-9)
 
 
@@ -141,8 +137,10 @@ def test_structure_serialization_roundtrip():
     )
     restored = CircuitSerializer.loads(CircuitSerializer.dumps(circuit))
     samples = circuit.sample(10, seed=2)
-    for s in samples:
-        assert circuit.log_likelihood(s) == pytest.approx(log_likelihood(restored, s))
+    for r in range(samples.shape[0]):
+        assert circuit.log_likelihood(samples[r]) == pytest.approx(
+            log_likelihood(restored, samples[r])
+        )
 
 
 def test_hmm_mle_training_improves():

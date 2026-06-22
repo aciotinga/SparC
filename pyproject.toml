@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sparc"
-version = "0.5.0"
+version = "0.5.1"
 description = "SparC: fast, modular sparse probabilistic circuits in Cython (CPU-only)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -59,6 +59,7 @@ markers = [
     "integration: cross-module leaf-type integration tests",
     "property: cross-cutting invariants (normalization, determinism)",
     "nodes: node construction and validation",
+    "no_dual_path: opt out of object-graph vs compiled parametrization",
 ]
 filterwarnings = [
     "error::pytest.PytestUnraisableExceptionWarning",

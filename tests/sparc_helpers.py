@@ -73,10 +73,25 @@ def var_cardinalities(root: CircuitNode) -> dict[int, int]:
     return cards
 
 
+def assignment_array(values: dict[int, int]) -> np.ndarray:
+    """Build a 1-D assignment row (index ``i`` = value for variable ``i``)."""
+    if not values:
+        return np.array([], dtype=np.int32)
+    width = max(values) + 1
+    row = np.zeros(width, dtype=np.int32)
+    for var, val in values.items():
+        row[var] = val
+    return row
+
+
 def enumerate_assignments(scope: Sequence[int], cards: dict[int, int]):
+    width = max(scope) + 1
     ranges = [range(cards[v]) for v in scope]
     for values in itertools.product(*ranges):
-        yield {scope[i]: values[i] for i in range(len(scope))}
+        row = np.full(width, -1, dtype=np.int32)
+        for i, var in enumerate(scope):
+            row[var] = values[i]
+        yield row
 
 
 def exact_total_mass(circuit: Circuit, *, tol: float = 1e-10) -> float:
@@ -108,13 +123,12 @@ def exact_marginal(circuit: Circuit, var: int) -> np.ndarray:
 
 
 def empirical_marginal(
-    draws: Iterable[dict[int, int]], var: int, n_outcomes: int
+    draws: np.ndarray, var: int, n_outcomes: int
 ) -> np.ndarray:
     counts = np.zeros(n_outcomes, dtype=np.float64)
-    n = 0
-    for row in draws:
-        counts[row[var]] += 1.0
-        n += 1
+    n = draws.shape[0]
+    for r in range(n):
+        counts[draws[r, var]] += 1.0
     if n == 0:
         raise ValueError("no draws")
     return counts / n

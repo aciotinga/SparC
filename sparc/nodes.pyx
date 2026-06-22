@@ -20,6 +20,9 @@ from libcpp.utility cimport pair
 from libcpp.vector cimport vector
 from libc.math cimport exp, fabs, isfinite
 
+import numpy as np
+cimport numpy as cnp
+
 cdef double PROB_TOL = 1e-6
 
 
@@ -76,33 +79,39 @@ cdef class RandomState:
 # --- Evidence -----------------------------------------------------------------
 
 cdef class Evidence:
-    def __init__(self, object assignment=None):
-        self._values.clear()
-        if assignment is not None:
-            self.update_from_mapping(assignment)
+    def __init__(self, cnp.ndarray row not None):
+        if row.ndim != 1:
+            raise ValueError("Evidence array must be 1-D")
+        cdef Py_ssize_t i
+        cdef int val
+        self._buf.resize(<size_t>row.shape[0])
+        for i in range(row.shape[0]):
+            val = int(row[i])
+            if val < 0:
+                raise ValueError(f"outcome value must be non-negative, got {val}")
+            self._buf[<size_t>i] = val
 
-    cpdef void update_from_mapping(self, object assignment) except *:
-        cdef object key
-        cdef object value
-        cdef int var
-        cdef int outcome
-        self._values.clear()
-        for key, value in assignment.items():
-            var = int(key)
-            outcome = int(value)
-            if var < 0:
-                raise ValueError(f"variable index must be non-negative, got {var}")
-            if outcome < 0:
-                raise ValueError(f"outcome value must be non-negative, got {outcome}")
-            self._values[var] = outcome
+    cdef void init_dense(self, int width) except *:
+        if width < 0:
+            raise ValueError(f"evidence width must be non-negative, got {width}")
+        self._buf.assign(<size_t>width, -1)
+
+    cdef void set_var(self, int var, int value) noexcept:
+        if var >= 0 and <size_t>var < self._buf.size():
+            self._buf[<size_t>var] = value
 
     cdef int get(self, int var) except *:
-        if self._values.find(var) == self._values.end():
+        if var < 0 or <size_t>var >= self._buf.size():
             raise ValueError(f"missing evidence for variable {var}")
-        return self._values[var]
+        cdef int val = self._buf[<size_t>var]
+        if val < 0:
+            raise ValueError(f"missing evidence for variable {var}")
+        return val
 
     cdef inline bint has(self, int var) noexcept:
-        return self._values.find(var) != self._values.end()
+        if var < 0 or <size_t>var >= self._buf.size():
+            return False
+        return self._buf[<size_t>var] >= 0
 
     cdef void require_vars(self, unordered_set[int]& scope_vars) except *:
         cdef int v
@@ -294,7 +303,7 @@ cdef class InputNode(CircuitNode):
             f"{type(self).__name__} must implement prob_c"
         )
 
-    cdef void sample_into_c(self, RandomState rng, dict out) except *:
+    cdef void sample_into_c(self, RandomState rng, int* out) except *:
         raise NotImplementedError(
             f"{type(self).__name__} must implement sample_into_c"
         )
@@ -344,7 +353,7 @@ cdef class FiniteDiscreteInputNode(InputNode):
         ev.validate_value(var, value, card)
         return self.pmf_at(<size_t>value)
 
-    cdef void sample_into_c(self, RandomState rng, dict out) except *:
+    cdef void sample_into_c(self, RandomState rng, int* out) except *:
         cdef int var = self.scope_var_c()
         cdef size_t n = self.support_size()
         cdef size_t i

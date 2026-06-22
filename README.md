@@ -64,8 +64,9 @@ prod = ProductNode(id=2, children=[x0, x1])
 root = SumNode(id=3, children=[prod], parameters=[1.0])
 
 circuit = Circuit(root)
-circuit.log_likelihood({0: 0, 1: 1})
-circuit.sample(5, seed=0)
+point = np.array([0, 1], dtype=np.int32)
+circuit.log_likelihood(point)
+circuit.sample(5, seed=0)  # ndarray (5, max_var+1)
 
 data = np.random.randint(0, 2, size=(1000, 2)).astype(np.int32)
 circuit.compile().log_likelihood(data)

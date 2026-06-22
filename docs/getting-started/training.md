@@ -13,7 +13,7 @@ trainer = MLETrainer(circuit, lr=0.5, method="tangent")
 history = trainer.fit(dataset, epochs=100)
 ```
 
-- `dataset`: iterable of `{var: value}` dicts (complete assignments).
+- `dataset`: 2D `np.ndarray` of shape `(n_samples, n_columns)` with integer outcomes (`dtype=int32`). Column `j` holds values for variable `j` by default; use `var_to_col` on compiled evaluation for custom layouts.
 - `method`: `"tangent"` (project gradient onto simplex tangent, clip,
   renormalize) or `"euclidean"` (exact Euclidean projection after the step).
 

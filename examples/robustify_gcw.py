@@ -111,16 +111,6 @@ def mean_log_likelihood(circuit: Circuit, rows: np.ndarray) -> float:
     return float(circuit.compile().log_likelihood(rows).mean())
 
 
-def _samples_to_array(samples: list[dict[int, int]]) -> np.ndarray:
-    if not samples:
-        raise ValueError("samples must be non-empty")
-    vars_sorted = sorted(samples[0].keys())
-    return np.array(
-        [[s[v] for v in vars_sorted] for s in samples],
-        dtype=np.int32,
-    )
-
-
 def sample_log_exp_p_query(
     p_theta: Circuit,
     q_phi: Circuit,
@@ -129,8 +119,7 @@ def sample_log_exp_p_query(
     seed: int | None = None,
 ) -> float:
     """Monte Carlo estimate of log E_P[Q(X)]."""
-    samples = p_theta.sample(num_samples, seed=seed)
-    data = _samples_to_array(samples)
+    data = p_theta.sample(num_samples, seed=seed)
     log_q = q_phi.compile().log_likelihood(data)
     mean_q = float(np.exp(log_q).mean())
     return float(np.log(max(mean_q, PROB_FLOOR)))
@@ -144,8 +133,7 @@ def sample_log_exp_p_query_and_grad(
     seed: int | None = None,
 ) -> tuple[float, GradBundle]:
     """Monte Carlo estimate of log E_P[Q(X)] and grad w.r.t. q_phi."""
-    samples = p_theta.sample(num_samples, seed=seed)
-    data = _samples_to_array(samples)
+    data = p_theta.sample(num_samples, seed=seed)
     log_q = q_phi.compile().log_likelihood(data)
     q_vals = np.exp(log_q)
     mean_q = float(q_vals.mean())
@@ -156,8 +144,8 @@ def sample_log_exp_p_query_and_grad(
     inv_n = 1.0 / num_samples
     sum_g: dict = {}
     cat_g: dict = {}
-    for sample, qv in zip(samples, q_vals):
-        _, grad_log = q_phi.mean_log_likelihood_and_grad([sample])
+    for i, qv in enumerate(q_vals):
+        _, grad_log = q_phi.mean_log_likelihood_and_grad(data[i : i + 1])
         scale = inv_mean * inv_n * float(qv)
         for nid, vec in grad_log.sum_grads.items():
             arr = np.asarray(vec, dtype=np.float64)

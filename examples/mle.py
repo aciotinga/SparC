@@ -28,8 +28,8 @@ def load_csv_data(path: Path) -> np.ndarray:
     return np.loadtxt(path, delimiter=",", dtype=np.int32)
 
 
-def rows_to_dataset(rows: np.ndarray) -> list[dict[int, int]]:
-    return [dict(enumerate(row.tolist())) for row in rows]
+def rows_to_dataset(rows: np.ndarray) -> np.ndarray:
+    return np.ascontiguousarray(rows, dtype=np.int32)
 
 
 def mean_log_likelihood(circuit, rows: np.ndarray) -> float:

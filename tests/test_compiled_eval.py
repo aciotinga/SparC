@@ -16,6 +16,7 @@ from sparc import (
     log_likelihood,
     sample,
 )
+from tests.sparc_helpers import assignment_array
 
 pytestmark = pytest.mark.eval
 
@@ -30,7 +31,7 @@ def _mixed_circuit():
 
 
 class TestCompiledCircuit:
-    def test_batched_matches_per_row_dict(self):
+    def test_batched_matches_per_row(self):
         circuit = _mixed_circuit()
         compiled = circuit.compile()
         n = 64
@@ -42,12 +43,7 @@ class TestCompiledCircuit:
         for v in vars_:
             data[:, v] = rng.integers(0, cards[v], size=n)
         batched = compiled.log_likelihood(data)
-        per_row = np.array(
-            [
-                circuit.log_likelihood({vars_[i]: int(data[r, vars_[i]]) for i in range(len(vars_))})
-                for r in range(n)
-            ]
-        )
+        per_row = np.array([circuit.log_likelihood(data[r]) for r in range(n)])
         assert_allclose(batched, per_row, rtol=0, atol=1e-10)
 
     def test_var_to_col_reordering(self):
@@ -56,11 +52,13 @@ class TestCompiledCircuit:
         data = np.array([[0, 1], [1, 0], [1, 1]], dtype=np.int32)
         var_to_col = {5: 1, 9: 0}
         batched = compiled.log_likelihood(data, var_to_col=var_to_col)
-        expected = [
-            circuit.log_likelihood({5: 1, 9: 0}),
-            circuit.log_likelihood({5: 0, 9: 1}),
-            circuit.log_likelihood({5: 1, 9: 1}),
-        ]
+        expected = np.array(
+            [
+                circuit.log_likelihood(data[0], var_to_col=var_to_col),
+                circuit.log_likelihood(data[1], var_to_col=var_to_col),
+                circuit.log_likelihood(data[2], var_to_col=var_to_col),
+            ]
+        )
         assert_allclose(batched, expected, rtol=0, atol=1e-12)
 
     def test_invalid_column_mapping_raises(self):
@@ -80,10 +78,8 @@ class TestCompiledCircuit:
     def test_direct_compiled_matches_object_path(self):
         root = _mixed_circuit().root
         compiled = CompiledCircuit(root)
-        row = {5: 0, 9: 1}
-        data = np.zeros((1, 10), dtype=np.int32)
-        data[0, 5] = 0
-        data[0, 9] = 1
+        row = assignment_array({5: 0, 9: 1})
+        data = row.reshape(1, -1)
         assert_allclose(
             compiled.log_likelihood(data)[0],
             log_likelihood(root, row),
@@ -97,20 +93,27 @@ class TestCompiledCircuit:
             atol=1e-12,
         )
 
+    def test_1d_unified_api(self):
+        circuit = _mixed_circuit()
+        row = assignment_array({5: 1, 9: 0})
+        assert circuit.log_likelihood(row) == pytest.approx(
+            circuit.compile().log_likelihood(row)
+        )
+
 
 class TestEvalPathParity:
     """Object-path eval must agree with Circuit wrapper and compiled path."""
 
     def test_likelihood_wrapper_vs_function(self):
         circuit = _mixed_circuit()
-        row = {5: 1, 9: 0}
+        row = assignment_array({5: 1, 9: 0})
         assert circuit.likelihood(row) == pytest.approx(
             likelihood(circuit.root, row)
         )
 
     def test_log_likelihood_consistency(self):
         circuit = _mixed_circuit()
-        row = {5: 0, 9: 0}
+        row = assignment_array({5: 0, 9: 0})
         assert circuit.log_likelihood(row) == pytest.approx(
             np.log(circuit.likelihood(row))
         )
@@ -119,7 +122,7 @@ class TestEvalPathParity:
         root = _mixed_circuit().root
         a = sample(root, 50, seed=7)
         b = Circuit(root).sample(50, seed=7)
-        assert a == b
+        assert_allclose(a, b)
 
     def test_shared_subtree_eval_consistent(self):
         leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.2, 0.8])
@@ -132,5 +135,5 @@ class TestEvalPathParity:
         )
         root = SumNode(id=3, children=[shared, shared], parameters=[0.4, 0.6])
         circuit = Circuit(root)
-        row = {0: 1, 1: 0}
+        row = assignment_array({0: 1, 1: 0})
         assert circuit.likelihood(row) == pytest.approx(likelihood(root, row))

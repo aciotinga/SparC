@@ -38,7 +38,7 @@ cross = gcw_crossterm(c1, c2)
 cross, grad = gcw_crossterm_and_grad(c1, c2)
 
 coupling = gcw_coupling_circuit(c1, c2)
-coupling.sample(1000)  # joint (x, y) pairs
+coupling.sample(1000)  # ndarray (1000, max_var+1) joint assignments
 ```
 
 The coupling circuit lives over `vars(c1)` plus `vars(c2)` shifted to a

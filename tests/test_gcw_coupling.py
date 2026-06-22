@@ -29,6 +29,7 @@ from sparc import (
     SumNode,
     gcw_coupling_circuit,
 )
+from tests.sparc_helpers import assignment_array
 from tests.gcw_helpers import (
     empirical_marginal,
     exact_marginal,
@@ -149,8 +150,8 @@ class TestCouplingStructure:
         import itertools
 
         for values in itertools.product(*[range(cards[v]) for v in scope]):
-            assignment = {scope[i]: values[i] for i in range(len(scope))}
-            total += coupling.likelihood(assignment)
+            row = assignment_array({scope[i]: values[i] for i in range(len(scope))})
+            total += coupling.likelihood(row)
         assert_allclose(total, 1.0, rtol=0, atol=1e-10)
 
 
@@ -194,7 +195,7 @@ class TestCouplingExactMarginals:
         # Joint probabilities for (x=i, y=j) should equal the NW plan entries.
         for i in range(len(p)):
             for j in range(len(q)):
-                joint = coupling.likelihood({0: i, 1: j})
+                joint = coupling.likelihood(assignment_array({0: i, 1: j}))
                 assert_allclose(joint, plan[i, j], rtol=0, atol=1e-10)
 
     @pytest.mark.parametrize("seed", [0, 1, 7, 42])
@@ -254,8 +255,9 @@ class TestCouplingSampling:
     def test_sampled_assignments_have_positive_likelihood(self):
         circ1, circ2 = _canonical_sum_sum_pair()
         coupling = gcw_coupling_circuit(circ1, circ2)
-        for row in coupling.sample(100, seed=99):
-            mass = coupling.likelihood(row)
+        draws = coupling.sample(100, seed=99)
+        for r in range(draws.shape[0]):
+            mass = coupling.likelihood(draws[r])
             assert mass > 0.0
             assert math.isfinite(mass)
 
@@ -264,14 +266,14 @@ class TestCouplingSampling:
         coupling = gcw_coupling_circuit(circ1, circ2)
         a = coupling.sample(200, seed=123)
         b = coupling.sample(200, seed=123)
-        assert a == b
+        assert (a == b).all()
 
     def test_sampling_differs_across_seeds(self):
         circ1, circ2 = _canonical_sum_sum_pair()
         coupling = gcw_coupling_circuit(circ1, circ2)
         a = coupling.sample(500, seed=1)
         b = coupling.sample(500, seed=2)
-        assert a != b
+        assert not (a == b).all()
 
 
 # ---------------------------------------------------------------------------
@@ -367,10 +369,10 @@ class TestCouplingCrossBuildConsistency:
         import itertools
 
         for values in itertools.product(*[range(cards[v]) for v in scope]):
-            assignment = {scope[i]: values[i] for i in range(len(scope))}
+            row = assignment_array({scope[i]: values[i] for i in range(len(scope))})
             assert_allclose(
-                c_a.likelihood(assignment),
-                c_b.likelihood(assignment),
+                c_a.likelihood(row),
+                c_b.likelihood(row),
                 rtol=0,
                 atol=1e-12,
             )

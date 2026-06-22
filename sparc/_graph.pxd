@@ -1,7 +1,11 @@
 from libc.stdint cimport uint64_t
+from libcpp.unordered_set cimport unordered_set
 from libcpp.vector cimport vector
 
-from sparc.nodes cimport CircuitNode
+import numpy as np
+cimport numpy as cnp
+
+from sparc.nodes cimport CircuitNode, RandomState
 
 # Leaf-kind tags for specialized nogil paths. Unknown FiniteDiscreteInputNode
 # subclasses use LEAF_GENERIC (PMF materialized via pmf_at at compile time).
@@ -57,7 +61,35 @@ cdef class CompiledCircuit:
         const int[:, ::1] data,
         const vector[int]& leaf_col,
         double[::1] out,
+        bint log_space,
     ) except *
+    cdef object _likelihood_impl(
+        self, object data, object var_to_col, bint log_space
+    )
+
+
+cdef int _max_var_from_scope(unordered_set[int]& scope) noexcept
+
+cdef cnp.ndarray _coerce_data_array(object data, bint allow_1d) except *
+
+cdef void _leaf_column_map(
+    CompiledCircuit g,
+    object var_to_col,
+    Py_ssize_t n_cols,
+    vector[int]& leaf_col,
+) except *
+
+cdef void _build_evidence_vector(
+    CompiledCircuit g, cnp.ndarray row, vector[int]& ev
+) except *
+
+cdef double _flat_eval(
+    CompiledCircuit g, const int* ev, bint log_space, double[::1] val
+) noexcept nogil
+
+cdef void _flat_sample_node(
+    CompiledCircuit g, size_t n, RandomState rng, int* out
+) noexcept nogil
 
 
 cdef void match_prod_children_flat(

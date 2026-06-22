@@ -17,7 +17,7 @@ from sparc import (
     log_exp_query,
 )
 
-pytestmark = pytest.mark.queries
+from tests.sparc_helpers import assignment_array
 
 
 class TestExpectationCompatibility:
@@ -82,7 +82,7 @@ class TestGCWCompatibility:
         l1 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
         l2 = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.5, 0.5])
         coupling = gcw_coupling_circuit(l1, l2)
-        assert coupling.likelihood({0: 0, 1: 0}) > 0.0
+        assert coupling.likelihood(assignment_array({0: 0, 1: 0})) > 0.0
 
     def test_crossterm_finite_on_valid_pair(self):
         l1 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.4, 0.6])

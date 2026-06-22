@@ -21,6 +21,7 @@ from sparc import (
 from sparc.builders import EmbeddingBuilder, RegionEmbeddingBuilder, RandomRegionGraph
 from tests.gcw_helpers import pollute_heap_with_couplings
 from tests.sparc_helpers import (
+    assignment_array,
     exact_marginal,
     exact_total_mass,
     make_sum,
@@ -79,12 +80,12 @@ class TestDeterminismProperties:
         a = coupling.sample(500, seed=42)
         pollute_heap_with_couplings(gcw_coupling_circuit, rounds=8, seed=1)
         b = coupling.sample(500, seed=42)
-        assert a == b
+        assert (a == b).all()
 
     def test_likelihood_independent_of_build_order(self):
         leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.3, 0.7])
         pollute_heap_with_couplings(gcw_coupling_circuit, rounds=5, seed=2)
-        assert likelihood(leaf, {0: 1}) == pytest.approx(0.7)
+        assert likelihood(leaf, assignment_array({0: 1})) == pytest.approx(0.7)
 
 
 class TestIdempotenceProperties:
@@ -105,7 +106,7 @@ class TestIdempotenceProperties:
         circuit = Circuit(
             make_sum(1, 0, [[0.6, 0.4], [0.2, 0.8]], [0.5, 0.5], id_base=10)
         )
-        row = {0: 0}
+        row = assignment_array({0: 0})
         assert circuit.log_likelihood(row) == pytest.approx(
             np.log(circuit.likelihood(row))
         )

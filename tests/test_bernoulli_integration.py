@@ -17,6 +17,7 @@ from sparc import (
     mean_log_likelihood_and_grad,
 )
 from tests.sparc_helpers import (
+    assignment_array,
     empirical_marginal,
     exact_marginal,
     fd_gradient_simplex,
@@ -29,7 +30,7 @@ pytestmark = pytest.mark.integration
 class TestBernoulliLikelihoodGrad:
     def test_bernoulli_ll_grad_matches_fd(self):
         p_init = 0.35
-        dataset = [{0: 0}, {0: 1}, {0: 1}, {0: 0}]
+        dataset = np.array([[0], [1], [1], [0]], dtype=np.int32)
 
         def f(probs):
             node = BernoulliInputNode(id=0, scope_var=0, p=float(probs[1]))
@@ -46,7 +47,7 @@ class TestBernoulliLikelihoodGrad:
         b = BernoulliInputNode(id=0, scope_var=0, p=0.4)
         c = BernoulliInputNode(id=1, scope_var=1, p=0.7)
         circuit = Circuit(ProductNode(id=2, children=[b, c]))
-        assert circuit.likelihood({0: 1, 1: 1}) == pytest.approx(0.4 * 0.7)
+        assert circuit.likelihood(assignment_array({0: 1, 1: 1})) == pytest.approx(0.4 * 0.7)
 
 
 class TestBernoulliQueries:

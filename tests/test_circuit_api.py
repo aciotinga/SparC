@@ -18,6 +18,7 @@ from sparc import (
     SumNode,
 )
 from tests.sparc_helpers import (
+    assignment_array,
     exact_total_mass,
     walk_pc_invariants,
 )
@@ -38,7 +39,7 @@ def _build_tree():
 class TestCircuitClone:
     def test_clone_preserves_likelihood(self):
         circuit = Circuit(_build_tree())
-        asg = {0: 1, 1: 0}
+        asg = assignment_array({0: 1, 1: 0})
         assert_allclose(
             circuit.clone().log_likelihood(asg),
             circuit.log_likelihood(asg),
@@ -66,7 +67,7 @@ class TestCircuitSaveLoad:
             path = Path(tmp) / "circuit.json"
             circuit.save(path)
             loaded = Circuit.load(path)
-        row = {0: 0, 1: 1}
+        row = assignment_array({0: 0, 1: 1})
         assert_allclose(
             loaded.log_likelihood(row),
             circuit.log_likelihood(row),
@@ -91,7 +92,9 @@ class TestCircuitSaveLoad:
             path = Path(tmp) / "bern.json"
             circuit.save(path)
             loaded = Circuit.load(path)
-        assert loaded.likelihood({0: 1}) == pytest.approx(circuit.likelihood({0: 1}))
+        assert loaded.likelihood(assignment_array({0: 1})) == pytest.approx(
+            circuit.likelihood(assignment_array({0: 1}))
+        )
 
 
 class TestCircuitAutoScope:
