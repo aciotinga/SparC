@@ -43,6 +43,14 @@ The flattened representation stores:
 - `leaf_var`, `leaf_card`, `leaf_pmf_flat`, `leaf_logpmf_flat`: leaf metadata and PMFs
 - `node_ids`, `scope_sig`: gradient keys and product-child matching
 
+## Batched evaluation
+
+2-D input `(n_samples, n_columns)` is evaluated on a **node-major** layout: each
+post-order node updates all batch lanes in one contiguous sweep so the C++
+compiler can auto-vectorize across the sample axis. The public API is unchanged
+(`log_likelihood` / `likelihood` on `CompiledCircuit`); only the internal
+`nogil` kernel differs from the per-row scalar loop.
+
 ## Migration
 
 | Before | After |

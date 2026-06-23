@@ -46,6 +46,22 @@ class TestCompiledCircuit:
         per_row = np.array([circuit.log_likelihood(data[r]) for r in range(n)])
         assert_allclose(batched, per_row, rtol=0, atol=1e-10)
 
+    def test_large_batch_stress(self):
+        circuit = _mixed_circuit()
+        compiled = circuit.compile()
+        n = 10_000
+        rng = np.random.default_rng(42)
+        vars_ = sorted(circuit.root.scope_as_list())
+        width = max(vars_) + 1
+        data = np.zeros((n, width), dtype=np.int32)
+        for v in vars_:
+            data[:, v] = rng.integers(0, 2, size=n)
+        batched = compiled.log_likelihood(data)
+        per_row = np.array([circuit.log_likelihood(data[r]) for r in range(8)])
+        assert_allclose(batched[:8], per_row, rtol=0, atol=1e-10)
+        assert batched.shape == (n,)
+        assert np.all(np.isfinite(batched))
+
     def test_var_to_col_reordering(self):
         circuit = _mixed_circuit()
         compiled = circuit.compile()

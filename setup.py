@@ -1,3 +1,4 @@
+import os
 import sys
 import sysconfig
 
@@ -5,11 +6,27 @@ import numpy as np
 from Cython.Build import cythonize
 from setuptools import Extension, setup
 
+_fast_build = os.environ.get("SPARC_FAST_BUILD", "").lower() in ("1", "true", "yes")
+
 _cc = sysconfig.get_config_var("CC") or ""
-if sys.platform == "win32" and "gcc" not in _cc.lower() and "clang" not in _cc.lower():
-    extra_compile_args = ["/O2", "/std:c++17"]
+_is_msvc = (
+    sys.platform == "win32"
+    and "gcc" not in _cc.lower()
+    and "clang" not in _cc.lower()
+)
+
+if _is_msvc:
+    extra_compile_args = ["/std:c++17", "/Ox", "/fp:fast"]
+    extra_link_args = []
+    if not _fast_build:
+        extra_compile_args.append("/GL")
+        extra_link_args.append("/LTCG")
 else:
-    extra_compile_args = ["-O3", "-std=c++17"]
+    extra_compile_args = ["-std=c++17", "-O3", "-ffast-math", "-funroll-loops"]
+    extra_link_args = []
+    if not _fast_build:
+        extra_compile_args.append("-flto")
+        extra_link_args.append("-flto")
 
 _numpy_include = np.get_include()
 
@@ -44,6 +61,7 @@ ext_modules = cythonize(
             language="c++",
             include_dirs=[_numpy_include],
             extra_compile_args=extra_compile_args,
+            extra_link_args=extra_link_args,
         )
         for name in _pyx_modules
     ],

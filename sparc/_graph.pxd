@@ -83,6 +83,22 @@ cdef void _build_evidence_vector(
     CompiledCircuit g, cnp.ndarray row, vector[int]& ev
 ) except *
 
+cdef void _validate_batch_data(
+    CompiledCircuit g,
+    const int[:, ::1] data,
+    const vector[int]& leaf_col,
+) except *
+
+cdef void _flat_eval_batch(
+    CompiledCircuit g,
+    const int[:, ::1] data,
+    const vector[int]& leaf_col,
+    Py_ssize_t n_rows,
+    bint log_space,
+    double[:, ::1] val,
+    double[::1] out,
+) noexcept nogil
+
 cdef double _flat_eval(
     CompiledCircuit g, const int* ev, bint log_space, double[::1] val
 ) noexcept nogil

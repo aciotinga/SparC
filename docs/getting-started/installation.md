@@ -11,6 +11,15 @@ pip install -e .
 This compiles all extension modules in place. On Linux and macOS you need
 `g++` or `clang++`; on Windows, MSVC with C++17 support.
 
+The default build enables aggressive portable optimizations (including
+link-time optimization). The first compile may take longer than a typical
+Cython project. For faster iterative rebuilds during development, disable
+LTO:
+
+```bash
+SPARC_FAST_BUILD=1 pip install -e .
+```
+
 ## Optional extras
 
 ```bash

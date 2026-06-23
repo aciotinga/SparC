@@ -1,5 +1,5 @@
 # distutils: language = c++
-# distutils: extra_compile_args = -std=c++17 -O3
+# cython: boundscheck=False, wraparound=False
 """Differentiable mean log-likelihood (reverse-mode AD over the circuit DAG).
 
 ``GradBundle`` is the single gradient container used everywhere in SparC:
@@ -17,8 +17,10 @@ cimport numpy as cnp
 from sparc._graph cimport (
     CompiledCircuit,
     _coerce_data_array,
+    _flat_eval_batch,
     _leaf_column_map,
     _max_var_from_scope,
+    _validate_batch_data,
 )
 from sparc._mathutils cimport sp_logsumexp, sp_safe_log
 from sparc.eval cimport _evidence_from_row
@@ -227,7 +229,8 @@ cdef void _flat_grad_core(
     const int[:, ::1] data,
     const vector[int]& leaf_col,
     Py_ssize_t n_rows,
-    double* val,
+    double[:, ::1] val,
+    double[::1] ll_scratch,
     double* adj,
     double* sum_pool,
     double* cat_pool,
@@ -245,52 +248,16 @@ cdef void _flat_grad_core(
     cdef int kind
     cdef int col
     cdef int value
-    cdef double acc
-    cdef double max_log
-    cdef double sum_exp
-    cdef double term
     cdef double bar
     cdef double ll
     cdef double child_ll
     cdef double log_w
     cdef double p_v
     cdef double total = 0.0
+    _flat_eval_batch(g, data, leaf_col, n_rows, True, val, ll_scratch)
     for r in range(n_rows):
-        for n in range(g.n_nodes):
-            kind = g.kinds[n]
-            if kind == NODE_INPUT:
-                col = leaf_col[n]
-                value = data[r, col]
-                val[n] = g.leaf_logpmf_flat[g.leaf_pmf_off[n] + <size_t>value]
-            elif kind == NODE_PRODUCT:
-                start = g.child_off[n]
-                stop = g.child_off[n + 1]
-                acc = 0.0
-                for k in range(start, stop):
-                    acc += val[g.children_flat[k]]
-                val[n] = acc
-            else:
-                start = g.child_off[n]
-                stop = g.child_off[n + 1]
-                max_log = -INFINITY
-                for k in range(start, stop):
-                    term = g.sum_logw_flat[k] + val[g.children_flat[k]]
-                    if term > max_log:
-                        max_log = term
-                if (not isfinite(max_log)) or max_log == -INFINITY:
-                    val[n] = -INFINITY
-                else:
-                    sum_exp = 0.0
-                    for k in range(start, stop):
-                        term = g.sum_logw_flat[k] + val[g.children_flat[k]]
-                        if isfinite(term) and term > -INFINITY:
-                            sum_exp += exp(term - max_log)
-                    if sum_exp <= 0.0:
-                        val[n] = -INFINITY
-                    else:
-                        val[n] = max_log + log(sum_exp)
-        total += val[g.root_index]
-        if val[g.root_index] <= -INFINITY:
+        total += val[g.root_index, r]
+        if val[g.root_index, r] <= -INFINITY:
             continue
         for n in range(g.n_nodes):
             adj[n] = 0.0
@@ -315,14 +282,14 @@ cdef void _flat_grad_core(
                 for k in range(start, stop):
                     adj[g.children_flat[k]] += bar
             else:
-                ll = val[n]
+                ll = val[n, r]
                 if ll == -INFINITY:
                     continue
                 start = g.child_off[n]
                 stop = g.child_off[n + 1]
                 for k in range(start, stop):
                     child = g.children_flat[k]
-                    child_ll = val[child]
+                    child_ll = val[child, r]
                     log_w = g.sum_logw_flat[k]
                     if log_w > -INFINITY and child_ll > -INFINITY:
                         adj[child] += bar * exp(log_w + child_ll - ll)
@@ -340,12 +307,15 @@ cdef tuple _flat_solve_dataset(
     cdef double inv_n = 1.0 / <double>n
     cdef vector[int] leaf_col
     _leaf_column_map(g, var_to_col, arr.shape[1], leaf_col)
+    _validate_batch_data(g, arr, leaf_col)
 
-    cdef vector[double] val
+    cdef object val_arr = np.empty((g.n_nodes, n), dtype=np.float64)
+    cdef double[:, ::1] val_view = val_arr
+    cdef object ll_scratch_arr = np.empty(n, dtype=np.float64)
+    cdef double[::1] ll_scratch = ll_scratch_arr
     cdef vector[double] adj
     cdef vector[double] sum_pool
     cdef vector[double] cat_pool
-    val.assign(g.n_nodes, 0.0)
     adj.assign(g.n_nodes, 0.0)
     sum_pool.assign(g.children_flat.size(), 0.0)
     cat_pool.assign(g.leaf_pmf_flat.size(), 0.0)
@@ -354,7 +324,7 @@ cdef tuple _flat_solve_dataset(
     with nogil:
         _flat_grad_core(
             g, data_view, leaf_col, n,
-            val.data(), adj.data(), sum_pool.data(), cat_pool.data(),
+            val_view, ll_scratch, adj.data(), sum_pool.data(), cat_pool.data(),
             inv_n, &total_ll,
         )
 

@@ -153,6 +153,26 @@ def test_categorical_gradients_match_finite_difference(node_id):
     assert_allclose(analytic, fd, rtol=1e-5, atol=1e-6)
 
 
+def test_compiled_grad_matches_object_path():
+    root = _structured_circuit()
+    pc = Circuit(root)
+    data = _dataset(seed=4)
+    compiled = pc.compile()
+
+    obj_mean, obj_grads = mean_log_likelihood_and_grad(root, data)
+    cmp_mean, cmp_grads = compiled.mean_log_likelihood_and_grad(data)
+
+    assert_allclose(obj_mean, cmp_mean, rtol=1e-10, atol=1e-10)
+    for nid in obj_grads.sum_grads:
+        assert_allclose(
+            obj_grads.sum_grads[nid], cmp_grads.sum_grads[nid], rtol=1e-9, atol=1e-9
+        )
+    for nid in obj_grads.cat_grads:
+        assert_allclose(
+            obj_grads.cat_grads[nid], cmp_grads.cat_grads[nid], rtol=1e-9, atol=1e-9
+        )
+
+
 def test_empty_dataset_raises():
     root = _structured_circuit()
     with pytest.raises(ValueError):

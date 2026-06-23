@@ -1,5 +1,4 @@
 # distutils: language = c++
-# distutils: extra_compile_args = -std=c++17 -O3
 # cython: boundscheck=False, wraparound=False
 """Flattened circuit representation for nogil fast-path inference.
 
@@ -38,6 +37,7 @@ from sparc.nodes cimport (
     RandomState,
     SumNode,
 )
+from sparc._mathutils cimport SP_MAX_SUM_FANIN, sp_logsumexp_ptr
 
 
 cdef inline double sp_graph_sigmoid(double x) noexcept nogil:
@@ -251,6 +251,187 @@ cdef void _build_evidence_vector(
                 )
 
 
+cdef void _flat_eval_sum_node(
+    CompiledCircuit g,
+    size_t n,
+    bint log_space,
+    double[::1] val,
+) noexcept nogil:
+    """Evaluate a single sum node into val[n] (1-D activation buffer)."""
+    cdef size_t start = g.child_off[n]
+    cdef size_t stop = g.child_off[n + 1]
+    cdef size_t k
+    cdef size_t nf = stop - start
+    cdef double acc
+    cdef double max_log
+    cdef double sum_exp
+    cdef double term
+    cdef double terms[SP_MAX_SUM_FANIN]
+    if log_space:
+        if nf == 0:
+            val[n] = -INFINITY
+        elif nf <= SP_MAX_SUM_FANIN:
+            for k in range(start, stop):
+                terms[k - start] = g.sum_logw_flat[k] + val[g.children_flat[k]]
+            val[n] = sp_logsumexp_ptr(terms, nf)
+        else:
+            max_log = -INFINITY
+            for k in range(start, stop):
+                term = g.sum_logw_flat[k] + val[g.children_flat[k]]
+                if term > max_log:
+                    max_log = term
+            if not isfinite(max_log) or max_log == -INFINITY:
+                val[n] = -INFINITY
+            else:
+                sum_exp = 0.0
+                for k in range(start, stop):
+                    term = g.sum_logw_flat[k] + val[g.children_flat[k]]
+                    if isfinite(term) and term > -INFINITY:
+                        sum_exp += exp(term - max_log)
+                if sum_exp <= 0.0:
+                    val[n] = -INFINITY
+                else:
+                    val[n] = max_log + log(sum_exp)
+    else:
+        acc = 0.0
+        for k in range(start, stop):
+            acc += g.sum_w_flat[k] * val[g.children_flat[k]]
+        val[n] = acc
+
+
+cdef void _flat_eval_sum_node_batch(
+    CompiledCircuit g,
+    size_t n,
+    Py_ssize_t n_rows,
+    bint log_space,
+    double[:, ::1] val,
+) noexcept nogil:
+    """Evaluate a single sum node across all batch lanes (val[n, r])."""
+    cdef size_t start = g.child_off[n]
+    cdef size_t stop = g.child_off[n + 1]
+    cdef size_t k
+    cdef size_t nf = stop - start
+    cdef Py_ssize_t r
+    cdef double acc
+    cdef double terms[SP_MAX_SUM_FANIN]
+    cdef double max_log
+    cdef double sum_exp
+    cdef double term
+    if log_space:
+        if nf == 0:
+            for r in range(n_rows):
+                val[n, r] = -INFINITY
+        elif nf <= SP_MAX_SUM_FANIN:
+            for r in range(n_rows):
+                for k in range(start, stop):
+                    terms[k - start] = (
+                        g.sum_logw_flat[k] + val[g.children_flat[k], r]
+                    )
+                val[n, r] = sp_logsumexp_ptr(terms, nf)
+        else:
+            for r in range(n_rows):
+                max_log = -INFINITY
+                for k in range(start, stop):
+                    term = g.sum_logw_flat[k] + val[g.children_flat[k], r]
+                    if term > max_log:
+                        max_log = term
+                if not isfinite(max_log) or max_log == -INFINITY:
+                    val[n, r] = -INFINITY
+                else:
+                    sum_exp = 0.0
+                    for k in range(start, stop):
+                        term = g.sum_logw_flat[k] + val[g.children_flat[k], r]
+                        if isfinite(term) and term > -INFINITY:
+                            sum_exp += exp(term - max_log)
+                    if sum_exp <= 0.0:
+                        val[n, r] = -INFINITY
+                    else:
+                        val[n, r] = max_log + log(sum_exp)
+    else:
+        for r in range(n_rows):
+            acc = 0.0
+            for k in range(start, stop):
+                acc += g.sum_w_flat[k] * val[g.children_flat[k], r]
+            val[n, r] = acc
+
+
+cdef void _validate_batch_data(
+    CompiledCircuit g,
+    const int[:, ::1] data,
+    const vector[int]& leaf_col,
+) except *:
+    cdef Py_ssize_t n_rows = data.shape[0]
+    cdef Py_ssize_t r
+    cdef size_t n
+    cdef int col
+    cdef int value
+    cdef int card
+    for n in range(g.n_nodes):
+        if g.kinds[n] != NODE_INPUT:
+            continue
+        col = leaf_col[n]
+        card = g.leaf_card[n]
+        for r in range(n_rows):
+            value = data[r, col]
+            if value < 0 or value >= card:
+                raise ValueError(
+                    f"value {value} out of range [0, {card}) in column {col}"
+                )
+
+
+cdef void _flat_eval_batch(
+    CompiledCircuit g,
+    const int[:, ::1] data,
+    const vector[int]& leaf_col,
+    Py_ssize_t n_rows,
+    bint log_space,
+    double[:, ::1] val,
+    double[::1] out,
+) noexcept nogil:
+    cdef size_t n
+    cdef size_t k
+    cdef size_t start
+    cdef size_t stop
+    cdef int kind
+    cdef int col
+    cdef int value
+    cdef size_t off
+    cdef Py_ssize_t r
+    cdef double acc
+    for n in range(g.n_nodes):
+        kind = g.kinds[n]
+        if kind == NODE_INPUT:
+            col = leaf_col[n]
+            off = g.leaf_pmf_off[n]
+            if log_space:
+                for r in range(n_rows):
+                    value = data[r, col]
+                    val[n, r] = g.leaf_logpmf_flat[off + value]
+            else:
+                for r in range(n_rows):
+                    value = data[r, col]
+                    val[n, r] = g.leaf_pmf_flat[off + value]
+        elif kind == NODE_PRODUCT:
+            start = g.child_off[n]
+            stop = g.child_off[n + 1]
+            if log_space:
+                for r in range(n_rows):
+                    acc = 0.0
+                    for k in range(start, stop):
+                        acc += val[g.children_flat[k], r]
+                    val[n, r] = acc
+            else:
+                for r in range(n_rows):
+                    acc = 1.0
+                    for k in range(start, stop):
+                        acc *= val[g.children_flat[k], r]
+                    val[n, r] = acc
+        else:
+            _flat_eval_sum_node_batch(g, n, n_rows, log_space, val)
+    for r in range(n_rows):
+        out[r] = val[g.root_index, r]
+
+
 cdef double _flat_eval(
     CompiledCircuit g, const int* ev, bint log_space, double[::1] val
 ) noexcept nogil:
@@ -262,9 +443,6 @@ cdef double _flat_eval(
     cdef int var
     cdef int value
     cdef double acc
-    cdef double max_log
-    cdef double sum_exp
-    cdef double term
     for n in range(g.n_nodes):
         kind = g.kinds[n]
         if kind == NODE_INPUT:
@@ -287,31 +465,7 @@ cdef double _flat_eval(
                     acc *= val[g.children_flat[k]]
             val[n] = acc
         else:
-            start = g.child_off[n]
-            stop = g.child_off[n + 1]
-            if log_space:
-                max_log = -INFINITY
-                for k in range(start, stop):
-                    term = g.sum_logw_flat[k] + val[g.children_flat[k]]
-                    if term > max_log:
-                        max_log = term
-                if not isfinite(max_log) or max_log == -INFINITY:
-                    val[n] = -INFINITY
-                else:
-                    sum_exp = 0.0
-                    for k in range(start, stop):
-                        term = g.sum_logw_flat[k] + val[g.children_flat[k]]
-                        if isfinite(term) and term > -INFINITY:
-                            sum_exp += exp(term - max_log)
-                    if sum_exp <= 0.0:
-                        val[n] = -INFINITY
-                    else:
-                        val[n] = max_log + log(sum_exp)
-            else:
-                acc = 0.0
-                for k in range(start, stop):
-                    acc += g.sum_w_flat[k] * val[g.children_flat[k]]
-                val[n] = acc
+            _flat_eval_sum_node(g, n, log_space, val)
     return val[g.root_index]
 
 
@@ -632,78 +786,13 @@ cdef class CompiledCircuit:
         bint log_space,
     ) except *:
         cdef Py_ssize_t n_rows = data.shape[0]
-        cdef Py_ssize_t r
-        cdef size_t n
-        cdef size_t k
-        cdef size_t start
-        cdef size_t stop
-        cdef int kind
-        cdef int col
-        cdef int value
-        cdef int card
-        cdef double acc
-        cdef double max_log
-        cdef double sum_exp
-        cdef double term
-        cdef vector[double] val
-        val.assign(self.n_nodes, 0.0)
+        cdef object val_arr = np.empty((self.n_nodes, n_rows), dtype=np.float64)
+        cdef double[:, ::1] val_view = val_arr
+        _validate_batch_data(self, data, leaf_col)
         with nogil:
-            for r in range(n_rows):
-                for n in range(self.n_nodes):
-                    kind = self.kinds[n]
-                    if kind == NODE_INPUT:
-                        col = leaf_col[n]
-                        value = data[r, col]
-                        card = self.leaf_card[n]
-                        if value < 0 or value >= card:
-                            with gil:
-                                raise ValueError(
-                                    f"value {value} out of range [0, {card}) "
-                                    f"in column {col}"
-                                )
-                        if log_space:
-                            val[n] = self.leaf_logpmf_flat[self.leaf_pmf_off[n] + value]
-                        else:
-                            val[n] = self.leaf_pmf_flat[self.leaf_pmf_off[n] + value]
-                    elif kind == NODE_PRODUCT:
-                        start = self.child_off[n]
-                        stop = self.child_off[n + 1]
-                        if log_space:
-                            acc = 0.0
-                            for k in range(start, stop):
-                                acc += val[self.children_flat[k]]
-                        else:
-                            acc = 1.0
-                            for k in range(start, stop):
-                                acc *= val[self.children_flat[k]]
-                        val[n] = acc
-                    else:
-                        start = self.child_off[n]
-                        stop = self.child_off[n + 1]
-                        if log_space:
-                            max_log = -INFINITY
-                            for k in range(start, stop):
-                                term = self.sum_logw_flat[k] + val[self.children_flat[k]]
-                                if term > max_log:
-                                    max_log = term
-                            if not isfinite(max_log) or max_log == -INFINITY:
-                                val[n] = -INFINITY
-                            else:
-                                sum_exp = 0.0
-                                for k in range(start, stop):
-                                    term = self.sum_logw_flat[k] + val[self.children_flat[k]]
-                                    if isfinite(term) and term > -INFINITY:
-                                        sum_exp += exp(term - max_log)
-                                if sum_exp <= 0.0:
-                                    val[n] = -INFINITY
-                                else:
-                                    val[n] = max_log + log(sum_exp)
-                        else:
-                            acc = 0.0
-                            for k in range(start, stop):
-                                acc += self.sum_w_flat[k] * val[self.children_flat[k]]
-                            val[n] = acc
-                out[r] = val[self.root_index]
+            _flat_eval_batch(
+                self, data, leaf_col, n_rows, log_space, val_view, out
+            )
 
     def sample(self, Py_ssize_t n_samples, object seed=None):
         """Draw samples as a 2-D integer array of shape ``(n_samples, max_var+1)``."""

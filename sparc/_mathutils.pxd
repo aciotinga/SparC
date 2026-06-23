@@ -2,6 +2,9 @@
 from libcpp.vector cimport vector
 from libc.math cimport exp, INFINITY, isfinite, log
 
+cdef enum:
+    SP_MAX_SUM_FANIN = 64
+
 
 cdef inline double SP_NEG_INF() noexcept nogil:
     return -INFINITY
@@ -13,9 +16,8 @@ cdef inline double sp_safe_log(double x) noexcept nogil:
     return -INFINITY
 
 
-cdef inline double sp_logsumexp(const vector[double]& log_vals) noexcept nogil:
-    """Numerically stable log(sum(exp(log_vals)))."""
-    cdef size_t n = log_vals.size()
+cdef inline double sp_logsumexp_ptr(const double* log_vals, size_t n) noexcept nogil:
+    """Numerically stable log(sum(exp(log_vals))) from a C array."""
     cdef size_t i
     cdef double max_log
     cdef double sum_exp = 0.0
@@ -35,3 +37,20 @@ cdef inline double sp_logsumexp(const vector[double]& log_vals) noexcept nogil:
     if sum_exp <= 0.0:
         return -INFINITY
     return max_log + log(sum_exp)
+
+
+cdef inline void sp_logsumexp_batch(
+    double* out,
+    Py_ssize_t n_rows,
+    const double* terms,
+    size_t n_terms,
+) noexcept nogil:
+    """Per batch lane r, logsumexp over n_terms pre-gathered terms."""
+    cdef Py_ssize_t r
+    for r in range(n_rows):
+        out[r] = sp_logsumexp_ptr(&terms[r * n_terms], n_terms)
+
+
+cdef inline double sp_logsumexp(const vector[double]& log_vals) noexcept nogil:
+    """Numerically stable log(sum(exp(log_vals)))."""
+    return sp_logsumexp_ptr(log_vals.data(), log_vals.size())

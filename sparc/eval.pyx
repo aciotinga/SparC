@@ -1,5 +1,4 @@
 # distutils: language = c++
-# distutils: extra_compile_args = -std=c++17 -O3
 # cython: boundscheck=False, wraparound=False
 """Evaluation queries: object-graph path for live circuits, flat path via
 :class:`~sparc._graph.CompiledCircuit`.
