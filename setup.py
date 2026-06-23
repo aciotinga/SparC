@@ -22,7 +22,9 @@ if _is_msvc:
         extra_compile_args.append("/GL")
         extra_link_args.append("/LTCG")
 else:
-    extra_compile_args = ["-std=c++17", "-O3", "-ffast-math", "-funroll-loops"]
+    # Avoid -ffast-math: it breaks log-sum-exp guards (isfinite(-inf), -inf
+    # comparisons) and causes log_exp_query to return -1 instead of -inf on Linux.
+    extra_compile_args = ["-std=c++17", "-O3", "-funroll-loops"]
     extra_link_args = []
     if not _fast_build:
         extra_compile_args.append("-flto")

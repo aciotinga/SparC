@@ -12,7 +12,7 @@ shared :class:`~sparc.queries._engine.CoupleContext`.
 from libc.stdint cimport uint64_t
 from libcpp.unordered_map cimport unordered_map
 from libcpp.vector cimport vector
-from libc.math cimport exp, INFINITY, log
+from libc.math cimport exp, INFINITY, isfinite, log
 
 import numpy as np
 
@@ -402,11 +402,11 @@ cdef class LogExpectationContext(CoupleContext):
         cdef _LogExpLeaf entry
         for k in range(n):
             term = sp_safe_log(P.pmf_at(k)) + sp_safe_log(Q.pmf_at(k))
-            if term > max_val:
+            if isfinite(term) and term > max_val:
                 max_val = term
         for k in range(n):
             term = sp_safe_log(P.pmf_at(k)) + sp_safe_log(Q.pmf_at(k))
-            if term > -INFINITY:
+            if isfinite(term):
                 total += exp(term - max_val)
         ell = -INFINITY if total <= 0.0 else max_val + log(total)
         if self.recording:
@@ -451,14 +451,14 @@ cdef class LogExpectationContext(CoupleContext):
             for j in range(m):
                 lp = sp_safe_log(Q.parameter_at(j))
                 term = lt + lp + V[i * m + j]
-                if term > max_val:
+                if isfinite(term) and term > max_val:
                     max_val = term
         for i in range(n):
             lt = sp_safe_log(P.parameter_at(i))
             for j in range(m):
                 lp = sp_safe_log(Q.parameter_at(j))
                 term = lt + lp + V[i * m + j]
-                if term > -INFINITY:
+                if isfinite(term):
                     total += exp(term - max_val)
         ell = -INFINITY if total <= 0.0 else max_val + log(total)
         if self.recording:
@@ -810,12 +810,12 @@ cdef void _logexp_forward_core(
             max_val = -INFINITY
             for k in range(n):
                 term = llog0[o0 + k] + llog1[o1 + k]
-                if term > max_val:
+                if isfinite(term) and term > max_val:
                     max_val = term
             total = 0.0
             for k in range(n):
                 term = llog0[o0 + k] + llog1[o1 + k]
-                if term > -INFINITY:
+                if isfinite(term):
                     total += exp(term - max_val)
             ell = -INFINITY if total <= 0.0 else max_val + log(total)
             e.ell = ell
@@ -836,13 +836,13 @@ cdef void _logexp_forward_core(
             for i in range(n):
                 for j in range(m):
                     term = slog0[cb0 + i] + slog1[cb1 + j] + V[i * m + j]
-                    if term > max_val:
+                    if isfinite(term) and term > max_val:
                         max_val = term
             total = 0.0
             for i in range(n):
                 for j in range(m):
                     term = slog0[cb0 + i] + slog1[cb1 + j] + V[i * m + j]
-                    if term > -INFINITY:
+                    if isfinite(term):
                         total += exp(term - max_val)
             ell = -INFINITY if total <= 0.0 else max_val + log(total)
             e.ell = ell
