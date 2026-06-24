@@ -45,7 +45,7 @@ Import structures from `sparc.structures` and builders from `sparc.builders`.
 
 ## Install
 
-Prebuilt wheels are available for Linux, Windows, and macOS (Python 3.9–3.12):
+Prebuilt wheels are available for Linux, Windows, and macOS (Python 3.10–3.14):
 
 ```bash
 pip install sparc-pc
