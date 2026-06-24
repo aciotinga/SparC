@@ -2,7 +2,7 @@
 
 ## PyPI install (recommended)
 
-Prebuilt wheels are available for Linux, Windows, and macOS (Python 3.9–3.12):
+Prebuilt wheels are available for Linux, Windows, and macOS (Python 3.10–3.14):
 
 ```bash
 pip install sparc-pc
@@ -49,7 +49,7 @@ pip install -e ".[gurobi]"    # optional Gurobi extra (not used by core library)
 
 ## Requirements
 
-- Python >= 3.9
+- Python >= 3.10, < 3.15
 - NumPy >= 1.20
 - C++17 compiler (source/editable installs only)
 
