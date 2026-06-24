@@ -3,18 +3,31 @@ requires = ["setuptools>=61", "wheel", "Cython>=3.0", "numpy>=1.20"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sparc"
+name = "sparc-pc"
 version = "0.5.3"
 description = "SparC: fast, modular sparse probabilistic circuits in Cython (CPU-only)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Adrian Ciotinga" }]
+keywords = [
+    "probabilistic-circuits",
+    "sum-product-networks",
+    "cython",
+    "wasserstein",
+    "machine-learning",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Cython",
+    "Topic :: Scientific/Engineering",
 ]
 dependencies = [
     "numpy>=1.20",
@@ -22,7 +35,13 @@ dependencies = [
 
 [project.optional-dependencies]
 gurobi = ["gurobipy>=11.0"]
-dev = ["pytest>=7.0", "pytest-randomly>=3.15", "scipy>=1.7"]
+dev = [
+    "build>=1.0",
+    "pytest>=7.0",
+    "pytest-randomly>=3.15",
+    "scipy>=1.7",
+    "twine>=4.0",
+]
 docs = [
     "Cython>=3.0",
     "numpy>=1.20",
@@ -35,14 +54,28 @@ docs = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/aciotinga/sparc"
 Documentation = "https://sparc-docs.readthedocs.io"
+Repository = "https://github.com/aciotinga/sparc"
+Issues = "https://github.com/aciotinga/sparc/issues"
+
+[tool.setuptools]
+include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["sparc*"]
 
 [tool.setuptools.package-data]
-"sparc" = ["*.pyi", "py.typed"]
+"sparc" = ["*.pyx", "*.pxd", "py.typed"]
+
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-*"
+skip = "*-musllinux_*"
+test-command = "python -c \"import sparc; from sparc import Circuit; print(sparc.__version__)\""
+
+[tool.cibuildwheel.macos]
+archs = ["x86_64", "arm64"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

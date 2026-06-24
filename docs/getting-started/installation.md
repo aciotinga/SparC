@@ -1,8 +1,26 @@
 # Installation
 
-SparC ships Cython/C++17 extensions, so a C++ compiler is required.
+## PyPI install (recommended)
 
-## Editable install
+Prebuilt wheels are available for Linux, Windows, and macOS (Python 3.9–3.12):
+
+```bash
+pip install sparc-pc
+```
+
+The distribution name on PyPI is **`sparc-pc`**; import as **`sparc`**:
+
+```python
+import sparc
+from sparc import Circuit
+```
+
+No C++ compiler is needed when installing from a wheel.
+
+## Editable install (from source)
+
+SparC ships Cython/C++17 extensions, so a C++ compiler is required when
+building from source.
 
 ```bash
 pip install -e .
@@ -23,16 +41,17 @@ SPARC_FAST_BUILD=1 pip install -e .
 ## Optional extras
 
 ```bash
-pip install -e ".[dev]"    # pytest, scipy (solver cross-checks in tests)
-pip install -e ".[docs]"   # MkDocs site builder
-pip install -e ".[gurobi]" # optional Gurobi extra (not used by core library)
+pip install "sparc-pc[dev]"   # pytest, scipy (from PyPI)
+pip install -e ".[dev]"       # same, editable from source
+pip install -e ".[docs]"      # MkDocs site builder
+pip install -e ".[gurobi]"    # optional Gurobi extra (not used by core library)
 ```
 
 ## Requirements
 
 - Python >= 3.9
 - NumPy >= 1.20
-- C++17 compiler
+- C++17 compiler (source/editable installs only)
 
 ## Verify the install
 

@@ -7,14 +7,19 @@ functions from this package; see subpackages :mod:`sparc.optim`,
 :mod:`sparc.builders`, :mod:`sparc.structures`, and :mod:`sparc.io` for
 training, random construction, built-in structures, and serialization.
 
-Full documentation: build locally with ``pip install -e ".[docs]" && mkdocs serve``.
+Install from PyPI with ``pip install sparc-pc`` (import name: ``sparc``).
+Full documentation: https://sparc-docs.readthedocs.io
 """
 
 from __future__ import annotations
 
 import importlib
+from importlib.metadata import PackageNotFoundError, version
 
-__version__ = "0.4.1"
+try:
+    __version__ = version("sparc-pc")
+except PackageNotFoundError:
+    __version__ = "0.0.0+dev"
 
 __all__ = [
     "Circuit",

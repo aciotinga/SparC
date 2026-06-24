@@ -1,5 +1,7 @@
 # SparC
 
+[![PyPI](https://img.shields.io/pypi/v/sparc-pc)](https://pypi.org/project/sparc-pc/)
+
 **Spar**se **C**ircuits — a fast, modular, CPU-only library for probabilistic
 circuits (PCs) written in Cython.
 
@@ -43,14 +45,32 @@ Import structures from `sparc.structures` and builders from `sparc.builders`.
 
 ## Install
 
-SparC ships Cython/C++17 extensions, so a C++ compiler is required.
+Prebuilt wheels are available for Linux, Windows, and macOS (Python 3.9–3.12):
+
+```bash
+pip install sparc-pc
+```
+
+The PyPI package name is `sparc-pc`; import as `sparc`:
+
+```python
+import sparc
+from sparc import Circuit
+```
+
+### From source (developers)
+
+SparC ships Cython/C++17 extensions, so a C++ compiler is required when
+installing from source or in editable mode:
 
 ```bash
 pip install -e .            # build extensions in place
-pip install -e ".[dev]"     # + pytest, scipy
+pip install -e ".[dev]"     # + pytest, scipy, build tools
 pip install -e ".[docs]"    # + MkDocs documentation builder
 pip install -e ".[gurobi]"  # optional Gurobi extra (unused by core library)
 ```
+
+See [Releasing](docs/releasing.md) for maintainer release steps.
 
 ## Quick start
 
