@@ -39,6 +39,7 @@ __all__ = [
     "log_likelihood",
     "sample",
     "CompiledCircuit",
+    "DeepCompiledCircuit",
     "mean_log_likelihood_and_grad",
     "GradBundle",
     "GroundMetric",
@@ -61,6 +62,7 @@ __all__ = [
 _LAZY_EXPORTS = {
     "Circuit": ("sparc.circuit", "Circuit"),
     "CompiledCircuit": ("sparc._graph", "CompiledCircuit"),
+    "DeepCompiledCircuit": ("sparc.deep_compile", "DeepCompiledCircuit"),
     "likelihood": ("sparc.eval", "likelihood"),
     "log_likelihood": ("sparc.eval", "log_likelihood"),
     "sample": ("sparc.eval", "sample"),

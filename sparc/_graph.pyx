@@ -900,6 +900,56 @@ cdef class CompiledCircuit:
         from sparc.grad import compiled_mean_log_likelihood_and_grad
         return compiled_mean_log_likelihood_and_grad(self, dataset, var_to_col)
 
+    def codegen_snapshot(self):
+        """Return frozen CSR layout and PMF pools for deep C codegen."""
+        cdef size_t n
+        cdef size_t i
+        cdef size_t n_edges = self.child_off[self.n_nodes]
+        cdef size_t n_pmf = self.leaf_pmf_off[self.n_nodes]
+        cdef list kinds = []
+        cdef list child_off = []
+        cdef list children_flat = []
+        cdef list sum_w_flat = []
+        cdef list sum_logw_flat = []
+        cdef list leaf_kind = []
+        cdef list leaf_var = []
+        cdef list leaf_card = []
+        cdef list leaf_pmf_off = []
+        cdef list leaf_pmf_flat = []
+        cdef list leaf_logpmf_flat = []
+        for n in range(self.n_nodes):
+            kinds.append(int(self.kinds[n]))
+            leaf_kind.append(int(self.leaf_kind[n]))
+            leaf_var.append(int(self.leaf_var[n]))
+            leaf_card.append(int(self.leaf_card[n]))
+        for n in range(self.n_nodes + 1):
+            child_off.append(int(self.child_off[n]))
+            leaf_pmf_off.append(int(self.leaf_pmf_off[n]))
+        for i in range(n_edges):
+            children_flat.append(int(self.children_flat[i]))
+            sum_w_flat.append(float(self.sum_w_flat[i]))
+            sum_logw_flat.append(float(self.sum_logw_flat[i]))
+        for i in range(n_pmf):
+            leaf_pmf_flat.append(float(self.leaf_pmf_flat[i]))
+            leaf_logpmf_flat.append(float(self.leaf_logpmf_flat[i]))
+        return {
+            "n_nodes": int(self.n_nodes),
+            "root_index": int(self.root_index),
+            "max_var": int(self.max_var),
+            "variables": list(self.variables),
+            "kinds": kinds,
+            "child_off": child_off,
+            "children_flat": children_flat,
+            "sum_w_flat": sum_w_flat,
+            "sum_logw_flat": sum_logw_flat,
+            "leaf_kind": leaf_kind,
+            "leaf_var": leaf_var,
+            "leaf_card": leaf_card,
+            "leaf_pmf_off": leaf_pmf_off,
+            "leaf_pmf_flat": leaf_pmf_flat,
+            "leaf_logpmf_flat": leaf_logpmf_flat,
+        }
+
     def cw_distance(self, other, double metric_p=1.0, double scale_factor=1.0, object metric=None):
         from sparc.queries.cw import cw_distance
         return cw_distance(self, other, metric_p=metric_p, scale_factor=scale_factor, metric=metric)

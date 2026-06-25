@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Sequence, Union
 
 import numpy as np
 
@@ -168,6 +168,54 @@ class Circuit:
         from sparc._graph import CompiledCircuit
 
         return CompiledCircuit(self.root)
+
+    def deep_compile(
+        self,
+        path: Union[str, Path, None] = None,
+        *,
+        compiler: Optional[str] = None,
+        flags: Sequence[str] = ("-O3", "-std=c11", "-march=native", "-ffast-math"),
+        parallel: bool = True,
+        simd: str = "multi",
+        tile: int = 128,
+    ):
+        """Deep-compile the circuit to unrolled native C for fast inference.
+
+        Returns a :class:`~sparc.deep_compile.DeepCompiledCircuit` with
+        ``likelihood`` / ``log_likelihood`` methods. Parameters live in a
+        mutable tape; call :meth:`refresh_parameters` after weight/PMF updates.
+
+        When *path* is omitted, compiled artifacts are stored in a managed
+        temporary directory and deleted by :meth:`DeepCompiledCircuit.close`
+        (also called automatically when the object is garbage-collected or
+        when used as a context manager).
+
+        Requires a C compiler (gcc/clang) at deep-compile time.
+
+        Args:
+            path: Optional output path stem (e.g. ``/tmp/model`` →
+                ``model.c`` + ``.so``). Omit to use a managed temp directory.
+            compiler: Optional compiler executable (auto-detected if omitted).
+            flags: Compiler flags (default ``-O3 -std=c11 -march=native -ffast-math``).
+            parallel: Use OpenMP row-block parallelism (default ``True``).
+            simd: ``"multi"`` links scalar+AVX2+AVX-512 with CPUID dispatch,
+                or ``"scalar"`` / ``"avx2"`` / ``"avx512"`` to limit ISAs.
+            tile: Row tile size for parallel batch evaluation (default ``128``).
+
+        Returns:
+            :class:`~sparc.deep_compile.DeepCompiledCircuit`
+        """
+        from sparc.deep_compile import deep_compile_circuit
+
+        return deep_compile_circuit(
+            self.root,
+            path,
+            compiler=compiler,
+            flags=flags,
+            parallel=parallel,
+            simd=simd,
+            tile=tile,
+        )
 
     def clone(self) -> "Circuit":
         """Return an independent deep copy of the circuit.

@@ -19,6 +19,7 @@ nav:
       - Architecture: "handbook/architecture.md"
       - Query Engine: "handbook/query-engine.md"
       - Compiled Evaluation: "handbook/compiled-evaluation.md"
+      - Deep Compilation: "handbook/deep-compilation.md"
       - Solvers: "handbook/solvers.md"
       - Serialization Format: "handbook/serialization-format.md"
   - API documentation: "api/"
