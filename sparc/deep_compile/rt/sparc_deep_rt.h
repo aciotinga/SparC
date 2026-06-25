@@ -18,17 +18,12 @@ enum SparcOpKind {
     SPARC_OP_SUM_LOG = 5,
 };
 
-#define SPARC_MAX_FANIN 4
-
 typedef struct SparcOp {
     int16_t kind;
     int16_t node;
     int16_t leaf_idx;
     int16_t pmf_off;
     int16_t leaf_card;
-    int16_t n_children;
-    int16_t children[SPARC_MAX_FANIN];
-    int16_t widx[SPARC_MAX_FANIN];
 } SparcOp;
 
 typedef void (*sparc_eval_batch_fn)(
@@ -40,6 +35,9 @@ typedef void (*sparc_eval_batch_fn)(
     int32_t n_ops,
     int32_t n_nodes,
     int32_t root_index,
+    const int16_t* child_off,
+    const int16_t* children_flat,
+    int32_t sum_w_base,
     double* workspace,
     double* out,
     int32_t tile,
@@ -70,6 +68,9 @@ SPARC_RT_EXPORT void sparc_eval_lin_batch_scalar(
     int32_t n_ops,
     int32_t n_nodes,
     int32_t root_index,
+    const int16_t* child_off,
+    const int16_t* children_flat,
+    int32_t sum_w_base,
     double* workspace,
     double* out,
     int32_t tile,
@@ -85,6 +86,9 @@ SPARC_RT_EXPORT void sparc_eval_log_batch_scalar(
     int32_t n_ops,
     int32_t n_nodes,
     int32_t root_index,
+    const int16_t* child_off,
+    const int16_t* children_flat,
+    int32_t sum_w_base,
     double* workspace,
     double* out,
     int32_t tile,
@@ -100,6 +104,9 @@ SPARC_RT_EXPORT void sparc_eval_lin_batch_avx2(
     int32_t n_ops,
     int32_t n_nodes,
     int32_t root_index,
+    const int16_t* child_off,
+    const int16_t* children_flat,
+    int32_t sum_w_base,
     double* workspace,
     double* out,
     int32_t tile,
@@ -115,6 +122,9 @@ SPARC_RT_EXPORT void sparc_eval_log_batch_avx2(
     int32_t n_ops,
     int32_t n_nodes,
     int32_t root_index,
+    const int16_t* child_off,
+    const int16_t* children_flat,
+    int32_t sum_w_base,
     double* workspace,
     double* out,
     int32_t tile,
@@ -130,6 +140,9 @@ SPARC_RT_EXPORT void sparc_eval_lin_batch_avx512(
     int32_t n_ops,
     int32_t n_nodes,
     int32_t root_index,
+    const int16_t* child_off,
+    const int16_t* children_flat,
+    int32_t sum_w_base,
     double* workspace,
     double* out,
     int32_t tile,
@@ -145,6 +158,9 @@ SPARC_RT_EXPORT void sparc_eval_log_batch_avx512(
     int32_t n_ops,
     int32_t n_nodes,
     int32_t root_index,
+    const int16_t* child_off,
+    const int16_t* children_flat,
+    int32_t sum_w_base,
     double* workspace,
     double* out,
     int32_t tile,

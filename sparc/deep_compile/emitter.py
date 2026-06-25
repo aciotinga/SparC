@@ -18,20 +18,6 @@ SPARC_OP_SUM_LIN = 4
 SPARC_OP_SUM_LOG = 5
 
 
-def _pad(children: list[int], n: int = 4) -> list[int]:
-    out = list(children[:n])
-    while len(out) < n:
-        out.append(-1)
-    return out
-
-
-def _pad_w(widx: list[int], n: int = 4) -> list[int]:
-    out = list(widx[:n])
-    while len(out) < n:
-        out.append(0)
-    return out
-
-
 def _build_op_lists(
     snap: dict[str, Any],
     layout: TapeLayout,
@@ -65,40 +51,24 @@ def _build_op_lists(
                 "leaf_idx": leaf_idx,
                 "pmf_off": layout.leaf_pmf_off[n],
                 "leaf_card": card,
-                "n_children": 0,
-                "children": [-1, -1, -1, -1],
-                "widx": [0, 0, 0, 0],
             }
             log_ops.append(entry)
             lin_ops.append(dict(entry))
         elif kind == NODE_PRODUCT:
-            start = snap["child_off"][n]
-            stop = snap["child_off"][n + 1]
-            children = list(snap["children_flat"][start:stop])
             base = {
                 "node": n,
                 "leaf_idx": -1,
                 "pmf_off": 0,
                 "leaf_card": 0,
-                "n_children": len(children),
-                "children": _pad(children),
-                "widx": [0, 0, 0, 0],
             }
             log_ops.append({**base, "kind": SPARC_OP_PROD_LOG})
             lin_ops.append({**base, "kind": SPARC_OP_PROD_LIN})
         elif kind == NODE_SUM:
-            start = snap["child_off"][n]
-            stop = snap["child_off"][n + 1]
-            children = list(snap["children_flat"][start:stop])
-            widx = [layout.sum_w_index(snap, n, k) for k in range(len(children))]
             base = {
                 "node": n,
                 "leaf_idx": -1,
                 "pmf_off": 0,
                 "leaf_card": 0,
-                "n_children": len(children),
-                "children": _pad(children),
-                "widx": _pad_w(widx),
             }
             log_ops.append({**base, "kind": SPARC_OP_SUM_LOG})
             lin_ops.append({**base, "kind": SPARC_OP_SUM_LIN})
@@ -109,12 +79,39 @@ def _build_op_lists(
 
 
 def _emit_op_entry(op: dict[str, Any]) -> str:
-    ch = ", ".join(str(c) for c in op["children"])
-    wi = ", ".join(str(w) for w in op["widx"])
     return (
         f"  {{ {op['kind']}, {op['node']}, {op['leaf_idx']}, "
-        f"{op['pmf_off']}, {op['leaf_card']}, {op['n_children']}, "
-        f"{{ {ch} }}, {{ {wi} }} }}"
+        f"{op['pmf_off']}, {op['leaf_card']} }}"
+    )
+
+
+def _emit_csr_arrays(snap: dict[str, Any], layout: TapeLayout) -> list[str]:
+    n_nodes = layout.n_nodes
+    n_edges = int(snap["child_off"][n_nodes])
+    child_off = ", ".join(str(int(x)) for x in snap["child_off"])
+    children = ", ".join(str(int(x)) for x in snap["children_flat"])
+    return [
+        f"#define SPARC_N_EDGES {n_edges}",
+        f"#define SPARC_SUM_W_BASE {layout.n_leaf_pmf}",
+        f"static const int16_t sparc_child_off[{n_nodes + 1}] = {{ {child_off} }};",
+        f"static const int16_t sparc_children_flat[{n_edges}] = {{ {children} }};",
+        "",
+    ]
+
+
+def _eval_row_args() -> str:
+    return (
+        "        SPARC_N_NODES, SPARC_ROOT_INDEX,\n"
+        "        sparc_child_off, sparc_children_flat, SPARC_SUM_W_BASE,\n"
+        "        workspace, out, 1, 0"
+    )
+
+
+def _eval_batch_args() -> str:
+    return (
+        "        SPARC_N_NODES, SPARC_ROOT_INDEX,\n"
+        "        sparc_child_off, sparc_children_flat, SPARC_SUM_W_BASE,\n"
+        "        workspace, out, tile, parallel"
     )
 
 
@@ -149,8 +146,13 @@ def emit_c_source(
         f"#define SPARC_TILE_DEFAULT {tile}",
         f"#define SPARC_PARALLEL_DEFAULT {par_flag}",
         "",
-        f"static const SparcOp sparc_ops_log[{n_log_ops}] = {{",
     ]
+    parts.extend(_emit_csr_arrays(snap, layout))
+    parts.extend(
+        [
+            f"static const SparcOp sparc_ops_log[{n_log_ops}] = {{",
+        ]
+    )
     parts.extend(_emit_op_entry(op) + "," for op in log_ops)
     parts.append("};")
     parts.append("")
@@ -166,6 +168,8 @@ def emit_c_source(
         parts.append("}")
         parts.append("")
 
+    eval_row_args = _eval_row_args()
+    eval_batch_args = _eval_batch_args()
     parts.extend(
         [
             "static void sparc_eval_row(",
@@ -185,16 +189,14 @@ def emit_c_source(
             "        tape, leaf_ev, 1, 1,",
             "        sparc_ops_log,",
             "        (int32_t)(sizeof(sparc_ops_log) / sizeof(sparc_ops_log[0])),",
-            "        SPARC_N_NODES, SPARC_ROOT_INDEX,",
-            "        workspace, out, 1, 0",
+            eval_row_args,
             "    );",
             "  } else {",
             "    sparc_dispatch()->eval_lin_batch(",
             "        tape, leaf_ev, 1, 1,",
             "        sparc_ops_lin,",
             "        (int32_t)(sizeof(sparc_ops_lin) / sizeof(sparc_ops_lin[0])),",
-            "        SPARC_N_NODES, SPARC_ROOT_INDEX,",
-            "        workspace, out, 1, 0",
+            eval_row_args,
             "    );",
             "  }",
             "}",
@@ -232,16 +234,14 @@ def emit_c_source(
             "        tape, leaf_ev, leaf_ev_stride, n_rows,",
             "        sparc_ops_log,",
             "        (int32_t)(sizeof(sparc_ops_log) / sizeof(sparc_ops_log[0])),",
-            "        SPARC_N_NODES, SPARC_ROOT_INDEX,",
-            "        workspace, out, tile, parallel",
+            eval_batch_args,
             "    );",
             "  } else {",
             "    sparc_dispatch()->eval_lin_batch(",
             "        tape, leaf_ev, leaf_ev_stride, n_rows,",
             "        sparc_ops_lin,",
             "        (int32_t)(sizeof(sparc_ops_lin) / sizeof(sparc_ops_lin[0])),",
-            "        SPARC_N_NODES, SPARC_ROOT_INDEX,",
-            "        workspace, out, tile, parallel",
+            eval_batch_args,
             "    );",
             "  }",
             "}",

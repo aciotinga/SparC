@@ -50,6 +50,16 @@ def _deterministic_circuit():
     return Circuit(root)
 
 
+def _wide_product_circuit():
+    """Product node with more than four children (deep-compile fanin regression)."""
+    leaves = [
+        BernoulliInputNode(id=i, scope_var=i, p=0.5 + 0.01 * i)
+        for i in range(8)
+    ]
+    root = ProductNode(id=8, children=leaves)
+    return Circuit(root)
+
+
 @requires_compiler
 class TestDeepCompile:
     def test_1d_log_likelihood_parity(self, tmp_path):
@@ -116,6 +126,20 @@ class TestDeepCompile:
         assert_allclose(deep.likelihood(row), ref.likelihood(row), atol=1e-12)
         bad = np.array([0, 0], dtype=np.int32)
         assert_allclose(deep.likelihood(bad), ref.likelihood(bad), atol=1e-12)
+
+    def test_wide_product_fanin_parity(self, tmp_path):
+        circuit = _wide_product_circuit()
+        ref = circuit.compile()
+        deep = circuit.deep_compile(tmp_path / "wide_prod")
+        rng = np.random.default_rng(0)
+        data = rng.integers(0, 2, size=(16, 8), dtype=np.int32)
+        assert_allclose(
+            deep.log_likelihood(data),
+            ref.log_likelihood(data),
+            rtol=0,
+            atol=1e-12,
+        )
+        deep.close()
 
     def test_artifacts_exist(self, tmp_path):
         circuit = _bernoulli_sum_circuit()
@@ -190,6 +214,8 @@ def test_generated_source_uses_sparc_op_table(tmp_path):
     assert "sparc_deep_rt.h" in text
     assert "static const SparcOp sparc_ops_log" in text
     assert "static const SparcOp sparc_ops_lin" in text
+    assert "static const int16_t sparc_child_off" in text
+    assert "static const int16_t sparc_children_flat" in text
     assert "sparc_log_likelihood_row" in text
     assert "sparc_log_likelihood_batch" in text
     assert "double* tape" in text
