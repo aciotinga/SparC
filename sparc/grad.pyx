@@ -16,7 +16,8 @@ cimport numpy as cnp
 
 from sparc._graph cimport (
     CompiledCircuit,
-    _coerce_data_array,
+    SP_MISSING_EVIDENCE,
+    _coerce_likelihood_data_with_missing,
     _flat_eval_batch,
     _leaf_column_map,
     _max_var_from_scope,
@@ -153,6 +154,8 @@ cdef class _LLGradContext:
             return
         leaf = <FiniteDiscreteInputNode>node
         var = leaf.scope_var_c()
+        if not self.evidence.has(var):
+            return
         value = self.evidence.get(var)
         p_v = leaf.pmf_at(<size_t>value)
         if p_v <= 0.0:
@@ -189,7 +192,7 @@ cdef class _LLGradContext:
                 arr[i] += bar * exp(child_ll - ll)
 
     cdef tuple solve_dataset(
-        self, CircuitNode root, cnp.ndarray arr, object var_to_col
+        self, CircuitNode root, cnp.ndarray arr, object var_to_col, bint allow_missing
     ):
         cdef Py_ssize_t n = arr.shape[0]
         cdef Py_ssize_t idx
@@ -207,7 +210,7 @@ cdef class _LLGradContext:
         inv_n = 1.0 / <double>n
         for idx in range(n):
             self.evidence = _evidence_from_row(
-                arr[idx], arr.shape[1], max_var, root.scope, var_to_col
+                arr[idx], arr.shape[1], max_var, root.scope, var_to_col, allow_missing
             )
             self._reset()
             ll = self._forward(root)
@@ -272,6 +275,8 @@ cdef void _flat_grad_core(
                 if g.leaf_trainable[n]:
                     col = leaf_col[n]
                     value = data[r, col]
+                    if value == SP_MISSING_EVIDENCE:
+                        continue
                     off = g.leaf_pmf_off[n]
                     p_v = g.leaf_pmf_flat[off + <size_t>value]
                     if p_v > 0.0:
@@ -299,7 +304,7 @@ cdef void _flat_grad_core(
 
 
 cdef tuple _flat_solve_dataset(
-    CompiledCircuit g, cnp.ndarray arr, object var_to_col
+    CompiledCircuit g, cnp.ndarray arr, object var_to_col, bint allow_missing
 ):
     cdef Py_ssize_t n = arr.shape[0]
     if n == 0:
@@ -307,7 +312,7 @@ cdef tuple _flat_solve_dataset(
     cdef double inv_n = 1.0 / <double>n
     cdef vector[int] leaf_col
     _leaf_column_map(g, var_to_col, arr.shape[1], leaf_col)
-    _validate_batch_data(g, arr, leaf_col)
+    _validate_batch_data(g, arr, leaf_col, allow_missing)
 
     cdef object val_arr = np.empty((g.n_nodes, n), dtype=np.float64)
     cdef double[:, ::1] val_view = val_arr
@@ -361,17 +366,21 @@ cdef tuple _flat_solve_dataset(
 
 def mean_log_likelihood_and_grad(CircuitNode root, object dataset, object var_to_col=None):
     """Mean log-likelihood and gradient (object-graph path)."""
-    cdef cnp.ndarray arr = _coerce_data_array(dataset, False)
+    cdef cnp.ndarray arr
+    cdef bint allow_missing
+    arr, allow_missing = _coerce_likelihood_data_with_missing(dataset, False)
     if root.scope.size() == 0:
         raise ValueError(
             "root scope is empty; call propagate_scope() on the circuit first"
         )
-    return _LLGradContext().solve_dataset(root, arr, var_to_col)
+    return _LLGradContext().solve_dataset(root, arr, var_to_col, allow_missing)
 
 
 def compiled_mean_log_likelihood_and_grad(
     CompiledCircuit g, object dataset, object var_to_col=None
 ):
     """Mean log-likelihood and gradient (flat nogil path)."""
-    cdef cnp.ndarray arr = _coerce_data_array(dataset, False)
-    return _flat_solve_dataset(g, arr, var_to_col)
+    cdef cnp.ndarray arr
+    cdef bint allow_missing
+    arr, allow_missing = _coerce_likelihood_data_with_missing(dataset, False)
+    return _flat_solve_dataset(g, arr, var_to_col, allow_missing)

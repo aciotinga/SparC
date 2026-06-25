@@ -116,6 +116,33 @@ class TestCompiledCircuit:
             circuit.compile().log_likelihood(row)
         )
 
+    def test_batched_nan_matches_per_row(self):
+        circuit = _mixed_circuit()
+        compiled = circuit.compile()
+        width = max(circuit.root.scope_as_list()) + 1
+        data = np.full((3, width), np.nan, dtype=np.float64)
+        data[0, 5] = 0.0
+        data[1, 9] = 1.0
+        data[2, 5] = 1.0
+        data[2, 9] = 0.0
+        batched = compiled.log_likelihood(data)
+        per_row = np.array([circuit.log_likelihood(data[r]) for r in range(3)])
+        assert_allclose(batched, per_row, rtol=0, atol=1e-12)
+
+    def test_var_to_col_with_nan(self):
+        circuit = _mixed_circuit()
+        compiled = circuit.compile()
+        data = np.array([[1.0, np.nan], [np.nan, 0.0]], dtype=np.float64)
+        var_to_col = {5: 1, 9: 0}
+        batched = compiled.log_likelihood(data, var_to_col=var_to_col)
+        expected = np.array(
+            [
+                circuit.log_likelihood(data[0], var_to_col=var_to_col),
+                circuit.log_likelihood(data[1], var_to_col=var_to_col),
+            ]
+        )
+        assert_allclose(batched, expected, rtol=0, atol=1e-12)
+
 
 class TestEvalPathParity:
     """Object-path eval must agree with Circuit wrapper and compiled path."""

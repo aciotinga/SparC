@@ -78,11 +78,14 @@ class Circuit:
             root.propagate_scope()
 
     def likelihood(self, data: np.ndarray, var_to_col: Optional[dict[int, int]] = None):
-        """Evaluate likelihood for a 1-D or 2-D integer assignment array.
+        """Evaluate likelihood for a 1-D or 2-D assignment array.
 
         Args:
             data: 1-D array (index ``i`` = value for variable ``i``) or 2-D
-                batch ``(n_samples, n_columns)``.
+                batch ``(n_samples, n_columns)``. Integer arrays require every
+                scoped variable to be observed. Floating arrays may use
+                ``numpy.nan`` to mark missing variables, which are marginalized
+                out.
             var_to_col: Optional mapping from variable index to column index
                 for 2-D batches (default: column ``i`` holds variable ``i``).
 
@@ -95,11 +98,14 @@ class Circuit:
         return likelihood(self.root, data, var_to_col)
 
     def log_likelihood(self, data: np.ndarray, var_to_col: Optional[dict[int, int]] = None):
-        """Evaluate log-likelihood for a 1-D or 2-D integer assignment array.
+        """Evaluate log-likelihood for a 1-D or 2-D assignment array.
 
         Args:
             data: 1-D array (index ``i`` = value for variable ``i``) or 2-D
-                batch ``(n_samples, n_columns)``.
+                batch ``(n_samples, n_columns)``. Integer arrays require every
+                scoped variable to be observed. Floating arrays may use
+                ``numpy.nan`` to mark missing variables, which are marginalized
+                out.
             var_to_col: Optional mapping from variable index to column index
                 for 2-D batches (default: column ``i`` holds variable ``i``).
 
@@ -119,7 +125,10 @@ class Circuit:
         """Mean log-likelihood over a dataset and its gradient.
 
         Args:
-            dataset: 2-D integer array ``(n_samples, n_columns)``.
+            dataset: 2-D assignment array ``(n_samples, n_columns)``. Integer
+                arrays require every scoped variable to be observed. Floating
+                arrays may use ``numpy.nan`` to mark missing variables, which
+                are marginalized out.
             var_to_col: Optional mapping from variable index to column index
                 (default: column ``i`` holds variable ``i``).
 

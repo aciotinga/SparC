@@ -62,15 +62,24 @@ cdef class CompiledCircuit:
         const vector[int]& leaf_col,
         double[::1] out,
         bint log_space,
+        bint allow_missing,
     ) except *
     cdef object _likelihood_impl(
         self, object data, object var_to_col, bint log_space
     )
 
 
+cdef int SP_MISSING_EVIDENCE
+
 cdef int _max_var_from_scope(unordered_set[int]& scope) noexcept
 
 cdef cnp.ndarray _coerce_data_array(object data, bint allow_1d) except *
+
+cdef cnp.ndarray _coerce_likelihood_data(object data, bint allow_1d) except *
+
+cdef tuple _coerce_likelihood_data_with_missing(
+    object data, bint allow_1d
+) except *
 
 cdef void _leaf_column_map(
     CompiledCircuit g,
@@ -80,13 +89,14 @@ cdef void _leaf_column_map(
 ) except *
 
 cdef void _build_evidence_vector(
-    CompiledCircuit g, cnp.ndarray row, vector[int]& ev
+    CompiledCircuit g, cnp.ndarray row, vector[int]& ev, bint allow_missing
 ) except *
 
 cdef void _validate_batch_data(
     CompiledCircuit g,
     const int[:, ::1] data,
     const vector[int]& leaf_col,
+    bint allow_missing,
 ) except *
 
 cdef void _flat_eval_batch(

@@ -15,7 +15,8 @@ cimport numpy as cnp
 
 from sparc._graph cimport (
     CompiledCircuit,
-    _coerce_data_array,
+    SP_MISSING_EVIDENCE,
+    _coerce_likelihood_data_with_missing,
     _flat_sample_node,
     _leaf_column_map,
     _max_var_from_scope,
@@ -44,6 +45,7 @@ cdef Evidence _evidence_from_row(
     int max_var,
     unordered_set[int]& scope,
     object var_to_col,
+    bint allow_missing,
 ) except *:
     cdef Evidence ev = Evidence.__new__(Evidence)
     cdef int v
@@ -59,6 +61,10 @@ cdef Evidence _evidence_from_row(
             )
         for v in sorted(scope):
             val = row[v]
+            if val == SP_MISSING_EVIDENCE:
+                if not allow_missing:
+                    raise ValueError(f"outcome value must be non-negative, got {val}")
+                continue
             if val < 0:
                 raise ValueError(f"outcome value must be non-negative, got {val}")
             ev.set_var(v, val)
@@ -71,10 +77,13 @@ cdef Evidence _evidence_from_row(
                     f"[0, {n_cols})"
                 )
             val = row[col]
+            if val == SP_MISSING_EVIDENCE:
+                if not allow_missing:
+                    raise ValueError(f"outcome value must be non-negative, got {val}")
+                continue
             if val < 0:
                 raise ValueError(f"outcome value must be non-negative, got {val}")
             ev.set_var(v, val)
-    ev.require_vars(scope)
     return ev
 
 
@@ -156,14 +165,15 @@ cdef double _run_query_evidence(CircuitNode root, Evidence evidence, bint log_sp
         raise ValueError(
             "root scope is empty; call propagate_scope() on the circuit first"
         )
-    ctx.evidence.require_vars(root.scope)
     return _eval(root, ctx)
 
 
 cdef object _likelihood_impl(
     CircuitNode root, object data, object var_to_col, bint log_space
 ):
-    cdef cnp.ndarray arr = _coerce_data_array(data, True)
+    cdef cnp.ndarray arr
+    cdef bint allow_missing
+    arr, allow_missing = _coerce_likelihood_data_with_missing(data, True)
     cdef int max_var = _max_var_from_scope(root.scope)
     cdef Py_ssize_t n_rows
     cdef Py_ssize_t r
@@ -172,14 +182,14 @@ cdef object _likelihood_impl(
     cdef double val
     if arr.ndim == 1:
         ev = _evidence_from_row(
-            arr, arr.shape[0], max_var, root.scope, var_to_col
+            arr, arr.shape[0], max_var, root.scope, var_to_col, allow_missing
         )
         return _run_query_evidence(root, ev, log_space)
     n_rows = arr.shape[0]
     out = np.empty(n_rows, dtype=np.float64)
     for r in range(n_rows):
         ev = _evidence_from_row(
-            arr[r], arr.shape[1], max_var, root.scope, var_to_col
+            arr[r], arr.shape[1], max_var, root.scope, var_to_col, allow_missing
         )
         val = _run_query_evidence(root, ev, log_space)
         out[r] = val
@@ -187,12 +197,22 @@ cdef object _likelihood_impl(
 
 
 cpdef object likelihood(CircuitNode root, object data, object var_to_col=None):
-    """Evaluate likelihood for a 1-D or 2-D integer assignment array."""
+    """Evaluate likelihood for a 1-D or 2-D assignment array.
+
+    Integer arrays require every scoped variable to be observed. Floating arrays
+    may use ``numpy.nan`` to mark missing variables; those variables are
+    marginalized out (summed over all outcomes).
+    """
     return _likelihood_impl(root, data, var_to_col, False)
 
 
 cpdef object log_likelihood(CircuitNode root, object data, object var_to_col=None):
-    """Evaluate log-likelihood for a 1-D or 2-D integer assignment array."""
+    """Evaluate log-likelihood for a 1-D or 2-D assignment array.
+
+    Integer arrays require every scoped variable to be observed. Floating arrays
+    may use ``numpy.nan`` to mark missing variables; those variables are
+    marginalized out (summed over all outcomes).
+    """
     return _likelihood_impl(root, data, var_to_col, True)
 
 

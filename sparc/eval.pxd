@@ -8,6 +8,7 @@ cdef Evidence _evidence_from_row(
     int max_var,
     unordered_set[int]& scope,
     object var_to_col,
+    bint allow_missing,
 ) except *
 
 cpdef object likelihood(CircuitNode root, object data, object var_to_col=*) except *

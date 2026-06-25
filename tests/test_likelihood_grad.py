@@ -202,3 +202,73 @@ def test_gradient_ascent_increases_likelihood():
 
     mean_ll_after, _ = mean_log_likelihood_and_grad(root, data)
     assert mean_ll_after >= mean_ll_before - 1e-9
+
+
+def _product_circuit():
+    x0 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.7, 0.3])
+    x1 = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
+    root = ProductNode(id=2, children=[x0, x1])
+    root.propagate_scope()
+    return root
+
+
+def test_marginal_mean_ll_matches_compile():
+    root = _product_circuit()
+    pc = Circuit(root)
+    data = np.array(
+        [
+            [0.0, np.nan],
+            [np.nan, 1.0],
+            [1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    mean_ll, _ = mean_log_likelihood_and_grad(root, data)
+    ref = float(pc.compile().log_likelihood(data).mean())
+    assert_allclose(mean_ll, ref, rtol=1e-12, atol=1e-12)
+
+
+def test_marginal_grad_observed_leaf_matches_fd():
+    root = _product_circuit()
+    data = np.array([[0.0, np.nan]], dtype=np.float64)
+    _, grads = mean_log_likelihood_and_grad(root, data)
+
+    node = _node_by_id(root, 0)
+    original = node.probabilities_list()
+
+    def f(params):
+        node.set_probabilities_list((np.asarray(params) / np.sum(params)).tolist())
+        val, _ = mean_log_likelihood_and_grad(root, data)
+        node.set_probabilities_list(original)
+        return val
+
+    fd = _fd_gradient_simplex(f, original)
+    analytic = _tangent(grads.cat_grads[0])
+    assert_allclose(analytic, fd, rtol=1e-5, atol=1e-6)
+
+
+def test_marginal_grad_missing_leaf_is_zero():
+    root = _product_circuit()
+    data = np.array([[0.0, np.nan]], dtype=np.float64)
+    _, grads = mean_log_likelihood_and_grad(root, data)
+    assert 1 not in grads.cat_grads
+
+
+def test_marginal_compiled_grad_matches_object_path():
+    root = _product_circuit()
+    pc = Circuit(root)
+    data = np.array(
+        [
+            [0.0, np.nan],
+            [np.nan, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    compiled = pc.compile()
+    obj_mean, obj_grads = mean_log_likelihood_and_grad(root, data)
+    cmp_mean, cmp_grads = compiled.mean_log_likelihood_and_grad(data)
+    assert_allclose(obj_mean, cmp_mean, rtol=1e-10, atol=1e-10)
+    for nid in obj_grads.cat_grads:
+        assert_allclose(
+            obj_grads.cat_grads[nid], cmp_grads.cat_grads[nid], rtol=1e-9, atol=1e-9
+        )

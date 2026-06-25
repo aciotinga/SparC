@@ -348,6 +348,8 @@ cdef class FiniteDiscreteInputNode(InputNode):
 
     cdef double prob_c(self, Evidence ev) except *:
         cdef int var = self.scope_var_c()
+        if not ev.has(var):
+            return 1.0
         cdef int value = ev.get(var)
         cdef Py_ssize_t card = self.cardinality()
         ev.validate_value(var, value, card)

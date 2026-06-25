@@ -40,6 +40,9 @@ from sparc.nodes cimport (
 from sparc._mathutils cimport SP_MAX_SUM_FANIN, sp_logsumexp_ptr
 
 
+cdef int SP_MISSING_EVIDENCE = -1
+
+
 cdef inline double sp_graph_sigmoid(double x) noexcept nogil:
     cdef double z
     if x >= 0.0:
@@ -193,6 +196,60 @@ cdef cnp.ndarray _coerce_data_array(object data, bint allow_1d) except *:
     raise ValueError("data must be 2-D (n_samples, n_columns)")
 
 
+cdef cnp.ndarray _coerce_likelihood_data(object data, bint allow_1d) except *:
+    cdef bint allow_missing
+    cdef cnp.ndarray arr
+    arr, allow_missing = _coerce_likelihood_data_with_missing(data, allow_1d)
+    return arr
+
+
+cdef tuple _coerce_likelihood_data_with_missing(
+    object data, bint allow_1d
+) except *:
+    if not isinstance(data, np.ndarray):
+        raise TypeError("data must be a numpy.ndarray")
+    cdef cnp.ndarray farr
+    cdef cnp.ndarray out
+    cdef cnp.ndarray arr
+    cdef Py_ssize_t i
+    cdef double fv
+    cdef int iv
+    if np.issubdtype(data.dtype, np.floating):
+        farr = np.ascontiguousarray(data, dtype=np.float64)
+        if allow_1d and farr.ndim == 1:
+            out = np.empty(farr.shape[0], dtype=np.int32)
+        elif farr.ndim == 2:
+            out = np.empty((farr.shape[0], farr.shape[1]), dtype=np.int32)
+        elif allow_1d:
+            raise ValueError("data must be 1-D or 2-D (n_samples, n_columns)")
+        else:
+            raise ValueError("data must be 2-D (n_samples, n_columns)")
+        for i in range(out.size):
+            fv = farr.flat[i]
+            if np.isnan(fv):
+                out.flat[i] = SP_MISSING_EVIDENCE
+            else:
+                iv = int(fv)
+                if iv != fv:
+                    raise ValueError(
+                        f"observed outcome must be an integer, got {fv}"
+                    )
+                if iv < 0:
+                    raise ValueError(
+                        f"outcome value must be non-negative, got {iv}"
+                    )
+                out.flat[i] = iv
+        return out, True
+    arr = np.ascontiguousarray(data, dtype=np.int32)
+    if allow_1d and arr.ndim == 1:
+        return arr, False
+    if arr.ndim == 2:
+        return arr, False
+    if allow_1d:
+        raise ValueError("data must be 1-D or 2-D (n_samples, n_columns)")
+    raise ValueError("data must be 2-D (n_samples, n_columns)")
+
+
 cdef void _leaf_column_map(
     CompiledCircuit g,
     object var_to_col,
@@ -220,7 +277,7 @@ cdef void _leaf_column_map(
 
 
 cdef void _build_evidence_vector(
-    CompiledCircuit g, cnp.ndarray row, vector[int]& ev
+    CompiledCircuit g, cnp.ndarray row, vector[int]& ev, bint allow_missing
 ) except *:
     cdef int max_var = g.max_var
     cdef cnp.ndarray arr = np.asarray(row, dtype=np.int32).ravel()
@@ -233,17 +290,20 @@ cdef void _build_evidence_vector(
             f"assignment array length {arr.size} is shorter than required "
             f"width {max_var + 1}"
         )
-    ev.assign(max_var + 1, -1)
+    ev.assign(max_var + 1, SP_MISSING_EVIDENCE)
     for v in range(max_var + 1):
         ev[v] = int(arr[v])
-    for v in g.variables:
-        if ev[v] < 0:
-            raise ValueError(f"missing evidence for variable {v}")
     for n in range(g.n_nodes):
         if g.kinds[n] == NODE_INPUT:
             v = g.leaf_var[n]
             val = ev[v]
             card = g.leaf_card[n]
+            if val == SP_MISSING_EVIDENCE:
+                if not allow_missing:
+                    raise ValueError(
+                        f"outcome value must be non-negative, got {val}"
+                    )
+                continue
             if val < 0 or val >= card:
                 raise ValueError(
                     f"evidence for variable {v}: outcome {val} out of range "
@@ -359,6 +419,7 @@ cdef void _validate_batch_data(
     CompiledCircuit g,
     const int[:, ::1] data,
     const vector[int]& leaf_col,
+    bint allow_missing,
 ) except *:
     cdef Py_ssize_t n_rows = data.shape[0]
     cdef Py_ssize_t r
@@ -373,6 +434,12 @@ cdef void _validate_batch_data(
         card = g.leaf_card[n]
         for r in range(n_rows):
             value = data[r, col]
+            if value == SP_MISSING_EVIDENCE:
+                if not allow_missing:
+                    raise ValueError(
+                        f"value {value} out of range [0, {card}) in column {col}"
+                    )
+                continue
             if value < 0 or value >= card:
                 raise ValueError(
                     f"value {value} out of range [0, {card}) in column {col}"
@@ -406,11 +473,17 @@ cdef void _flat_eval_batch(
             if log_space:
                 for r in range(n_rows):
                     value = data[r, col]
-                    val[n, r] = g.leaf_logpmf_flat[off + value]
+                    if value < 0:
+                        val[n, r] = 0.0
+                    else:
+                        val[n, r] = g.leaf_logpmf_flat[off + value]
             else:
                 for r in range(n_rows):
                     value = data[r, col]
-                    val[n, r] = g.leaf_pmf_flat[off + value]
+                    if value < 0:
+                        val[n, r] = 1.0
+                    else:
+                        val[n, r] = g.leaf_pmf_flat[off + value]
         elif kind == NODE_PRODUCT:
             start = g.child_off[n]
             stop = g.child_off[n + 1]
@@ -448,7 +521,9 @@ cdef double _flat_eval(
         if kind == NODE_INPUT:
             var = g.leaf_var[n]
             value = ev[var]
-            if log_space:
+            if value < 0:
+                val[n] = 0.0 if log_space else 1.0
+            elif log_space:
                 val[n] = g.leaf_logpmf_flat[g.leaf_pmf_off[n] + value]
             else:
                 val[n] = g.leaf_pmf_flat[g.leaf_pmf_off[n] + value]
@@ -751,7 +826,9 @@ cdef class CompiledCircuit:
     cdef object _likelihood_impl(
         self, object data, object var_to_col, bint log_space
     ):
-        cdef cnp.ndarray arr = _coerce_data_array(data, True)
+        cdef cnp.ndarray arr
+        cdef bint allow_missing
+        arr, allow_missing = _coerce_likelihood_data_with_missing(data, True)
         cdef vector[int] leaf_col
         cdef Py_ssize_t n_rows
         cdef Py_ssize_t n_cols
@@ -763,7 +840,7 @@ cdef class CompiledCircuit:
         cdef double[::1] val
         cdef double result
         if arr.ndim == 1:
-            _build_evidence_vector(self, arr, ev)
+            _build_evidence_vector(self, arr, ev, allow_missing)
             val_arr = np.empty(self.n_nodes, dtype=np.float64)
             val = val_arr
             with nogil:
@@ -775,7 +852,7 @@ cdef class CompiledCircuit:
         out = np.empty(n_rows, dtype=np.float64)
         out_view = out
         data_view = arr
-        self._score(data_view, leaf_col, out_view, log_space)
+        self._score(data_view, leaf_col, out_view, log_space, allow_missing)
         return out
 
     cdef void _score(
@@ -784,11 +861,12 @@ cdef class CompiledCircuit:
         const vector[int]& leaf_col,
         double[::1] out,
         bint log_space,
+        bint allow_missing,
     ) except *:
         cdef Py_ssize_t n_rows = data.shape[0]
         cdef object val_arr = np.empty((self.n_nodes, n_rows), dtype=np.float64)
         cdef double[:, ::1] val_view = val_arr
-        _validate_batch_data(self, data, leaf_col)
+        _validate_batch_data(self, data, leaf_col, allow_missing)
         with nogil:
             _flat_eval_batch(
                 self, data, leaf_col, n_rows, log_space, val_view, out

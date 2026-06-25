@@ -11,7 +11,7 @@ from sparc import (
     likelihood,
     log_likelihood,
 )
-from tests.sparc_helpers import assignment_array
+from tests.sparc_helpers import assignment_array, exact_partial_likelihood
 
 
 def test_leaf_likelihood():
@@ -135,3 +135,57 @@ def test_logsumexp_numerical_stability():
     ll = log_likelihood(root, assignment)
     assert ll > -math.inf
     assert ll == pytest.approx(math.log(likelihood(root, assignment)), rel=1e-9)
+
+
+def test_leaf_marginal_nan():
+    leaf = CategoricalInputNode(id=0, scope_var=1, probabilities=[0.7, 0.3])
+    row = np.array([np.nan, np.nan], dtype=np.float64)
+    assert likelihood(leaf, row) == pytest.approx(1.0)
+    assert log_likelihood(leaf, row) == pytest.approx(0.0)
+
+
+def test_product_partial_evidence_matches_exact():
+    x0 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.7, 0.3])
+    x1 = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
+    prod = ProductNode(id=2, children=[x0, x1])
+    prod.propagate_scope()
+    circuit = Circuit(prod)
+    row = np.array([0.0, np.nan], dtype=np.float64)
+    expected = exact_partial_likelihood(circuit, {0: 0})
+    assert likelihood(prod, row) == pytest.approx(expected)
+    assert log_likelihood(prod, row) == pytest.approx(math.log(expected))
+
+
+def test_sum_partial_evidence_matches_exact():
+    x0 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.8, 0.2])
+    x1 = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.3, 0.7])
+    mix = SumNode(id=2, children=[x0, x1], parameters=[0.6, 0.4])
+    x2 = CategoricalInputNode(id=3, scope_var=1, probabilities=[0.25, 0.75])
+    root = ProductNode(id=4, children=[mix, x2])
+    root.propagate_scope()
+    circuit = Circuit(root)
+    row = np.array([np.nan, 1.0], dtype=np.float64)
+    expected = exact_partial_likelihood(circuit, {1: 1})
+    assert likelihood(root, row) == pytest.approx(expected)
+
+
+def test_all_nan_normalized_circuit():
+    x0 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.7, 0.3])
+    x1 = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
+    prod = ProductNode(id=2, children=[x0, x1])
+    root = SumNode(id=3, children=[prod], parameters=[1.0])
+    root.propagate_scope()
+    row = np.array([np.nan, np.nan], dtype=np.float64)
+    assert likelihood(root, row) == pytest.approx(1.0)
+
+
+def test_integer_minus_one_still_raises():
+    leaf = CategoricalInputNode(id=0, scope_var=1, probabilities=[0.5, 0.5])
+    with pytest.raises(ValueError, match="non-negative"):
+        likelihood(leaf, np.array([0, -1], dtype=np.int32))
+
+
+def test_non_integer_float_raises():
+    leaf = CategoricalInputNode(id=0, scope_var=1, probabilities=[0.5, 0.5])
+    with pytest.raises(ValueError, match="integer"):
+        likelihood(leaf, np.array([0.5], dtype=np.float64))

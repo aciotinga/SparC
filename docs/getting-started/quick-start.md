@@ -31,6 +31,10 @@ circuit.likelihood(point)
 # Vectorized log-likelihood: rows = datapoints, cols = variables
 data = np.random.randint(0, 2, size=(1000, 2)).astype(np.int32)
 circuit.compile().log_likelihood(data)
+
+# Marginal query: NaN marks a missing variable (summed out)
+partial = np.array([0.0, np.nan], dtype=np.float64)
+circuit.log_likelihood(partial)
 ```
 
 ## Sampling

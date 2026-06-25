@@ -106,6 +106,17 @@ def exact_total_mass(circuit: Circuit, *, tol: float = 1e-10) -> float:
     return total
 
 
+def exact_partial_likelihood(circuit: Circuit, observed: dict[int, int]) -> float:
+    """Brute-force marginal likelihood over completions matching ``observed``."""
+    scope = sorted(circuit.root.scope_as_list())
+    cards = var_cardinalities(circuit.root)
+    total = 0.0
+    for assignment in enumerate_assignments(scope, cards):
+        if all(assignment[var] == val for var, val in observed.items()):
+            total += circuit.likelihood(assignment)
+    return total
+
+
 def exact_marginal(circuit: Circuit, var: int) -> np.ndarray:
     scope = sorted(circuit.root.scope_as_list())
     if var not in scope:
