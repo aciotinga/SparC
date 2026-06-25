@@ -20,6 +20,11 @@ from sparc.deep_compile.compiler import (
 from sparc.deep_compile.emitter import NODE_INPUT, emit_c_source, leaf_var_order
 from sparc.deep_compile.tape import TapeLayout, fill_linear_tape, fill_log_tape, make_tape_buffers
 
+try:
+    from sparc.deep_compile._native import fill_leaf_ev as _fill_leaf_ev_cython
+except ImportError:
+    _fill_leaf_ev_cython = None
+
 _DEEP_DATA_ERROR = (
     "deep-compiled circuits require fully observed integer assignments"
 )
@@ -27,6 +32,9 @@ _DEEP_DATA_ERROR = (
 _TAPE_PTR = ctypes.POINTER(ctypes.c_double)
 _I32_PTR = ctypes.POINTER(ctypes.c_int32)
 _F64_PTR = ctypes.POINTER(ctypes.c_double)
+
+_L3_BUDGET_BYTES = 8 * 1024 * 1024
+_MIN_TILE = 32
 
 
 def _coerce_deep_data(data: np.ndarray, *, allow_1d: bool) -> np.ndarray:
@@ -110,24 +118,33 @@ def _validate_batch(
             )
 
 
-def _extract_leaf_ev(
-    data: np.ndarray,
-    col_for_var: np.ndarray,
-    leaf_vars: Sequence[int],
-    out: np.ndarray,
-) -> np.ndarray:
-    """Fill *out* with shape (n_leaf, n_rows) from batch *data*."""
-    n_rows = data.shape[0]
-    n_leaf = len(leaf_vars)
-    need = n_leaf * n_rows
-    if out.shape != (n_leaf, n_rows):
-        if out.size < need:
-            out = np.empty((n_leaf, n_rows), dtype=np.int32)
-        else:
-            out = out.reshape(n_leaf, n_rows)
-    for i, var in enumerate(leaf_vars):
-        out[i, :] = data[:, int(col_for_var[var])]
-    return np.ascontiguousarray(out, dtype=np.int32)
+def _col_cache_key(var_to_col: Optional[dict[int, int]], n_cols: int) -> tuple:
+    if var_to_col is None:
+        return (None, n_cols)
+    return (frozenset(var_to_col.items()), n_cols)
+
+
+def _effective_exec_params(
+    n_nodes: int,
+    n_rows: int,
+    tile: int,
+    parallel: bool,
+) -> tuple[int, bool]:
+    """Adapt tile size and OpenMP use to keep workspace within cache budget."""
+    tile = max(_MIN_TILE, int(tile))
+    n_threads = (os.cpu_count() or 1) if parallel else 1
+    ws_bytes = n_nodes * tile * 8 * n_threads
+    if parallel and ws_bytes > _L3_BUDGET_BYTES:
+        parallel = False
+        n_threads = 1
+        ws_bytes = n_nodes * tile * 8
+    if n_nodes > 0:
+        max_tile = max(_MIN_TILE, _L3_BUDGET_BYTES // (n_nodes * 8 * max(n_threads, 1)))
+        if tile > max_tile:
+            tile = max(_MIN_TILE, max_tile)
+    if parallel and n_rows < n_threads * tile:
+        parallel = False
+    return tile, parallel
 
 
 class DeepCompiledCircuit:
@@ -159,8 +176,10 @@ class DeepCompiledCircuit:
         self._workspace = np.empty(self._layout.n_nodes, dtype=np.float64)
         self._workspace_rows = 1
         self._leaf_ev_buffer = np.empty(0, dtype=np.int32)
-        self._leaf_vars = leaf_var_order(self._snap)
+        self._leaf_vars = np.asarray(leaf_var_order(self._snap), dtype=np.int32)
         self._col_for_var: Optional[np.ndarray] = None
+        self._col_cache_key: Optional[tuple] = None
+        self._validated_once = False
 
         register_dll_search_paths()
         try:
@@ -201,6 +220,17 @@ class DeepCompiledCircuit:
             ctypes.c_int32, ctypes.c_int32, ctypes.c_int32,
         ]
         lib.sparc_workspace_doubles.restype = ctypes.c_int32
+        lib.sparc_fill_leaf_ev_batch.argtypes = [
+            _I32_PTR,
+            ctypes.c_int32,
+            ctypes.c_int32,
+            _I32_PTR,
+            _I32_PTR,
+            ctypes.c_int32,
+            _I32_PTR,
+            ctypes.c_int32,
+        ]
+        lib.sparc_fill_leaf_ev_batch.restype = None
 
         isa_override = os.environ.get("SPARC_DEEP_ISA")
         if isa_override:
@@ -224,21 +254,69 @@ class DeepCompiledCircuit:
                 "topology changed; deep_compile again after structural edits"
             )
         self._snap = snap
+        self._col_for_var = None
+        self._col_cache_key = None
+        self._validated_once = False
         fill_linear_tape(snap, self._tape_lin)
         fill_log_tape(snap, self._tape_log)
 
-    def _ensure_workspace(self, n_rows: int) -> np.ndarray:
+    def _get_col_for_var(
+        self,
+        var_to_col: Optional[dict[int, int]],
+        n_cols: int,
+    ) -> np.ndarray:
+        key = _col_cache_key(var_to_col, n_cols)
+        if self._col_for_var is not None and self._col_cache_key == key:
+            return self._col_for_var
+        col = _build_col_for_var(self._snap, var_to_col, n_cols)
+        self._col_for_var = col
+        self._col_cache_key = key
+        return col
+
+    def _ensure_workspace(self, n_rows: int, tile: int, parallel: bool) -> np.ndarray:
         need = int(
             self._lib.sparc_workspace_doubles(
                 ctypes.c_int32(self._layout.n_nodes),
-                ctypes.c_int32(self.tile),
-                ctypes.c_int32(1 if self.parallel else 0),
+                ctypes.c_int32(tile),
+                ctypes.c_int32(1 if parallel else 0),
             )
         )
         if self._workspace.size < need:
             self._workspace = np.empty(need, dtype=np.float64)
         self._workspace_rows = n_rows
         return self._workspace
+
+    def _extract_leaf_ev(
+        self,
+        data: np.ndarray,
+        col_for_var: np.ndarray,
+        n_rows: int,
+    ) -> np.ndarray:
+        n_leaf = self._leaf_vars.shape[0]
+        need = (n_leaf, n_rows)
+        if self._leaf_ev_buffer.shape != need:
+            if self._leaf_ev_buffer.size < n_leaf * n_rows:
+                self._leaf_ev_buffer = np.empty(need, dtype=np.int32)
+            else:
+                self._leaf_ev_buffer = self._leaf_ev_buffer.reshape(need)
+        leaf_ev = self._leaf_ev_buffer
+        n_cols = data.shape[1]
+        if n_leaf == 0:
+            return leaf_ev
+        if _fill_leaf_ev_cython is not None:
+            _fill_leaf_ev_cython(data, col_for_var, self._leaf_vars, leaf_ev)
+            return np.ascontiguousarray(leaf_ev, dtype=np.int32)
+        self._lib.sparc_fill_leaf_ev_batch(
+            data.ctypes.data_as(_I32_PTR),
+            ctypes.c_int32(n_cols),
+            ctypes.c_int32(n_rows),
+            col_for_var.ctypes.data_as(_I32_PTR),
+            self._leaf_vars.ctypes.data_as(_I32_PTR),
+            ctypes.c_int32(n_leaf),
+            leaf_ev.ctypes.data_as(_I32_PTR),
+            ctypes.c_int32(n_rows),
+        )
+        return leaf_ev
 
     def close(self) -> None:
         """Unload the native library and remove managed build artifacts."""
@@ -278,15 +356,19 @@ class DeepCompiledCircuit:
         self,
         data: np.ndarray,
         var_to_col: Optional[dict[int, int]] = None,
+        *,
+        validate: bool = True,
     ):
-        return self._score(data, var_to_col, log_space=False)
+        return self._score(data, var_to_col, log_space=False, validate=validate)
 
     def log_likelihood(
         self,
         data: np.ndarray,
         var_to_col: Optional[dict[int, int]] = None,
+        *,
+        validate: bool = True,
     ):
-        return self._score(data, var_to_col, log_space=True)
+        return self._score(data, var_to_col, log_space=True, validate=validate)
 
     def _score(
         self,
@@ -294,6 +376,7 @@ class DeepCompiledCircuit:
         var_to_col: Optional[dict[int, int]],
         *,
         log_space: bool,
+        validate: bool,
     ):
         if self._lib is None:
             raise RuntimeError("deep-compiled circuit is closed")
@@ -312,18 +395,21 @@ class DeepCompiledCircuit:
         )
 
         if arr.ndim == 1:
-            _validate_row(arr, self._snap)
+            if validate:
+                _validate_row(arr, self._snap)
             ev = np.ascontiguousarray(arr, dtype=np.int32)
             return row_fn(tape_ptr, ev.ctypes.data_as(_I32_PTR))
 
         n_rows, n_cols = arr.shape
-        col_for_var = _build_col_for_var(self._snap, var_to_col, n_cols)
-        _validate_batch(arr, self._snap, col_for_var)
-        leaf_ev = _extract_leaf_ev(
-            arr, col_for_var, self._leaf_vars, self._leaf_ev_buffer
+        col_for_var = self._get_col_for_var(var_to_col, n_cols)
+        if validate and not self._validated_once:
+            _validate_batch(arr, self._snap, col_for_var)
+            self._validated_once = True
+        tile, parallel = _effective_exec_params(
+            self._layout.n_nodes, n_rows, self.tile, self.parallel
         )
-        self._leaf_ev_buffer = leaf_ev
-        workspace = self._ensure_workspace(n_rows)
+        leaf_ev = self._extract_leaf_ev(arr, col_for_var, n_rows)
+        workspace = self._ensure_workspace(n_rows, tile, parallel)
         out = np.empty(n_rows, dtype=np.float64)
         batch_fn(
             tape_ptr,
@@ -332,8 +418,8 @@ class DeepCompiledCircuit:
             ctypes.c_int32(n_rows),
             workspace.ctypes.data_as(_F64_PTR),
             out.ctypes.data_as(_F64_PTR),
-            ctypes.c_int32(self.tile),
-            ctypes.c_int32(1 if self.parallel else 0),
+            ctypes.c_int32(tile),
+            ctypes.c_int32(1 if parallel else 0),
         )
         return out
 

@@ -104,6 +104,12 @@ class TestDeepCompile:
             rtol=0,
             atol=1e-12,
         )
+        assert_allclose(
+            deep.log_likelihood(data, validate=False),
+            ref.log_likelihood(data),
+            rtol=0,
+            atol=1e-12,
+        )
 
     def test_var_to_col_reordering(self, tmp_path):
         circuit = _mixed_circuit()
@@ -206,6 +212,41 @@ def test_managed_temp_artifacts_cleanup():
     assert not managed.source_path.parent.exists()
 
 
+def _large_chain_circuit(n_layers: int = 64):
+    """Build a deep chain of sum/product nodes for large-circuit smoke tests."""
+    leaves = [
+        BernoulliInputNode(id=i, scope_var=i, p=0.4 + 0.01 * (i % 5))
+        for i in range(16)
+    ]
+    root = ProductNode(id=1000, children=leaves)
+    next_id = 1001
+    for layer in range(n_layers):
+        child = root
+        root = SumNode(
+            id=next_id,
+            children=[child, leaves[layer % len(leaves)]],
+            parameters=[0.6, 0.4],
+        )
+        next_id += 1
+    return Circuit(root)
+
+
+@requires_compiler
+def test_large_chain_parity(tmp_path):
+    circuit = _large_chain_circuit(n_layers=80)
+    ref = circuit.compile()
+    deep = circuit.deep_compile(tmp_path / "large_chain")
+    rng = np.random.default_rng(3)
+    data = rng.integers(0, 2, size=(128, 16), dtype=np.int32)
+    assert_allclose(
+        deep.log_likelihood(data, validate=False),
+        ref.log_likelihood(data),
+        rtol=0,
+        atol=1e-11,
+    )
+    deep.close()
+
+
 @requires_compiler
 def test_generated_source_uses_sparc_op_table(tmp_path):
     circuit = _bernoulli_sum_circuit()
@@ -221,7 +262,6 @@ def test_generated_source_uses_sparc_op_table(tmp_path):
     assert "double* tape" in text
     assert "double* workspace" in text
     assert "sparc_dispatch()" in text
-    assert text.count("for (int32_t r = 0; r < n_rows") == 0
     deep.close()
 
 

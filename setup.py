@@ -48,6 +48,7 @@ _pyx_modules = [
     "sparc.queries.expectation",
     "sparc.queries.cw",
     "sparc.queries.gcw",
+    "sparc.deep_compile._native",
 ]
 
 

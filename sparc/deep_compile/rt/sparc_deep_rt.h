@@ -59,6 +59,32 @@ SPARC_RT_EXPORT int32_t sparc_workspace_doubles(
     int32_t n_nodes, int32_t tile, int32_t parallel
 );
 
+SPARC_RT_EXPORT void sparc_fill_leaf_ev_batch(
+    const int32_t* data,
+    int32_t data_row_stride,
+    int32_t n_rows,
+    const int32_t* col_for_var,
+    const int32_t* leaf_vars,
+    int32_t n_leaf,
+    int32_t* leaf_ev,
+    int32_t leaf_ev_stride
+);
+
+SPARC_RT_EXPORT void sparc_eval_one_op(
+    int log_space,
+    const SparcOp* op,
+    const double* tape,
+    const int32_t* leaf_ev,
+    int32_t leaf_ev_stride,
+    int32_t r0,
+    int32_t rn,
+    int32_t ws_stride,
+    const int16_t* child_off,
+    const int16_t* children_flat,
+    int32_t sum_w_base,
+    double* workspace
+);
+
 SPARC_RT_EXPORT void sparc_eval_lin_batch_scalar(
     const double* tape,
     const int32_t* leaf_ev,
