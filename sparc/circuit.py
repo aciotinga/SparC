@@ -174,10 +174,15 @@ class Circuit:
         path: Union[str, Path, None] = None,
         *,
         compiler: Optional[str] = None,
-        flags: Sequence[str] = ("-O3", "-std=c11", "-march=native", "-ffast-math"),
+        flags: Sequence[str] | None = None,
         parallel: bool = True,
-        simd: str = "multi",
         tile: int = 128,
+        isa: Optional[str] = None,
+        performance: str = "max",
+        compile_opt: str = "fast",
+        mode: str = "ultra",
+        simd: Optional[str] = None,
+        use_cache: bool = True,
     ):
         """Deep-compile the circuit to unrolled native C for fast inference.
 
@@ -196,11 +201,17 @@ class Circuit:
             path: Optional output path stem (e.g. ``/tmp/model`` →
                 ``model.c`` + ``.so``). Omit to use a managed temp directory.
             compiler: Optional compiler executable (auto-detected if omitted).
-            flags: Compiler flags (default ``-O3 -std=c11 -march=native -ffast-math``).
+            flags: Compiler flags (default from *compile_opt*: ``-O2`` for ``fast``).
             parallel: Use OpenMP row-block parallelism (default ``True``).
-            simd: ``"multi"`` links scalar+AVX2+AVX-512 with CPUID dispatch,
-                or ``"scalar"`` / ``"avx2"`` / ``"avx512"`` to limit ISAs.
             tile: Row tile size for parallel batch evaluation (default ``128``).
+            isa: ``None`` auto-detects best host ISA (``avx512`` / ``avx2`` /
+                ``scalar``); manual override allowed.
+            performance: ``"max"`` disables L3 workspace throttling (default).
+            compile_opt: ``"fast"`` (default) or ``"max"`` (``-O3 -march=native``).
+            mode: ``"ultra"`` (default) unrolled SIMD op schedule; ``"compat"``
+                uses legacy SparcOp dispatch tables.
+            use_cache: Reuse cached ``.dll`` / ``.so`` when topology matches.
+            simd: Deprecated alias for *isa*.
 
         Returns:
             :class:`~sparc.deep_compile.DeepCompiledCircuit`
@@ -213,8 +224,13 @@ class Circuit:
             compiler=compiler,
             flags=flags,
             parallel=parallel,
-            simd=simd,
             tile=tile,
+            isa=isa,
+            performance=performance,  # type: ignore[arg-type]
+            compile_opt=compile_opt,
+            mode=mode,
+            simd=simd,
+            use_cache=use_cache,
         )
 
     def clone(self) -> "Circuit":

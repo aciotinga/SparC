@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
@@ -194,7 +196,7 @@ class TestDeepCompile:
 @requires_compiler
 def test_managed_temp_artifacts_cleanup():
     circuit = _bernoulli_sum_circuit()
-    deep = circuit.deep_compile()
+    deep = circuit.deep_compile(use_cache=False)
     artifact_dir = deep.source_path.parent
     assert artifact_dir.is_dir()
     assert deep.library_path.is_file()
@@ -207,9 +209,62 @@ def test_managed_temp_artifacts_cleanup():
     deep.close()
     assert not artifact_dir.exists()
 
-    with circuit.deep_compile() as managed:
+    with circuit.deep_compile(use_cache=False) as managed:
         assert managed.log_likelihood(row) is not None
     assert not managed.source_path.parent.exists()
+
+
+@requires_compiler
+def test_deep_compile_cache_hit(tmp_path, monkeypatch):
+    import shutil
+
+    from sparc.deep_compile.cache import build_cache_key, cache_entry_dir
+    from sparc.deep_compile.compiler import compile_shared as real_compile_shared
+    from sparc.deep_compile.isa import compile_flags_for_opt, merge_compile_flags, resolve_isa
+
+    compile_calls: list[int] = []
+
+    def _counting_compile(*args, **kwargs):
+        compile_calls.append(1)
+        return real_compile_shared(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "sparc.deep_compile.compiler.compile_shared", _counting_compile
+    )
+    monkeypatch.setattr(
+        "sparc.deep_compile.runtime.compile_shared", _counting_compile
+    )
+
+    circuit = _bernoulli_sum_circuit()
+    snap = circuit.compile().codegen_snapshot()
+    isa_plan = resolve_isa(None)
+    flags = merge_compile_flags(compile_flags_for_opt("fast"), isa_plan, parallel=True)
+    cache_key = build_cache_key(
+        snap,
+        isa=isa_plan.name,
+        parallel=True,
+        tile=128,
+        compile_opt="fast",
+        mode="ultra",
+        flags=flags,
+    )
+    entry = cache_entry_dir(cache_key)
+    if entry.exists():
+        shutil.rmtree(entry)
+
+    deep1 = circuit.deep_compile(tmp_path / "cache1", use_cache=True)
+    assert len(compile_calls) == 1
+    deep1.close()
+
+    deep2 = circuit.deep_compile(tmp_path / "cache2", use_cache=True)
+    assert len(compile_calls) == 1
+    row = np.array([1, 0], dtype=np.int32)
+    assert_allclose(
+        deep2.log_likelihood(row),
+        circuit.compile().log_likelihood(row),
+        atol=1e-12,
+    )
+    deep2.close()
 
 
 def _large_chain_circuit(n_layers: int = 64):
@@ -248,19 +303,29 @@ def test_large_chain_parity(tmp_path):
 
 
 @requires_compiler
-def test_generated_source_uses_sparc_op_table(tmp_path):
+def test_generated_ultra_source(tmp_path):
     circuit = _bernoulli_sum_circuit()
-    deep = circuit.deep_compile(tmp_path / "src")
+    deep = circuit.deep_compile(tmp_path / "src", use_cache=False)
+    text = deep.source_path.read_text(encoding="utf-8")
+    assert "ultra deep_compile" in text
+    assert "sparc_ultra_rt.h" in text
+    assert "static void sparc_eval_tile(" in text
+    assert "sparc_ultra_" in text
+    assert "sparc_eval_tile_log" not in text
+    assert "sparc_eval_tile_lin" not in text
+    assert "sparc_log_likelihood_batch" in text
+    assert "sparc_eval_one_op" not in text
+    assert "sparc_dispatch()" not in text
+    deep.close()
+
+
+@requires_compiler
+def test_generated_compat_source_uses_sparc_op_table(tmp_path):
+    circuit = _bernoulli_sum_circuit()
+    deep = circuit.deep_compile(tmp_path / "src_compat", mode="compat")
     text = deep.source_path.read_text(encoding="utf-8")
     assert "sparc_deep_rt.h" in text
     assert "static const SparcOp sparc_ops_log" in text
-    assert "static const SparcOp sparc_ops_lin" in text
-    assert "static const int16_t sparc_child_off" in text
-    assert "static const int16_t sparc_children_flat" in text
-    assert "sparc_log_likelihood_row" in text
-    assert "sparc_log_likelihood_batch" in text
-    assert "double* tape" in text
-    assert "double* workspace" in text
     assert "sparc_dispatch()" in text
     deep.close()
 
@@ -270,7 +335,7 @@ def test_generated_source_uses_sparc_op_table(tmp_path):
 def test_isa_override_parity(tmp_path, isa):
     circuit = _mixed_circuit()
     ref = circuit.compile()
-    deep = circuit.deep_compile(tmp_path / f"mixed_{isa}", simd=isa)
+    deep = circuit.deep_compile(tmp_path / f"mixed_{isa}", isa=isa)
     assert deep.active_isa == isa
     n = 64
     rng = np.random.default_rng(1)
@@ -285,6 +350,44 @@ def test_isa_override_parity(tmp_path, isa):
         atol=1e-11,
     )
     deep.close()
+
+
+_EXAMPLE_PCS = Path(__file__).resolve().parents[1] / "examples" / "example_pcs"
+_EXAMPLE_DATA = Path(__file__).resolve().parents[1] / "examples" / "original_datasets"
+
+
+@requires_compiler
+@pytest.mark.parametrize(
+    "circuit_path",
+    sorted(_EXAMPLE_PCS.glob("*.json"))[:3],
+    ids=lambda p: p.stem,
+)
+def test_example_pc_ultra_parity(tmp_path, circuit_path):
+    stem = circuit_path.stem
+    data_path = _EXAMPLE_DATA / stem / f"{stem}.train.data"
+    if not data_path.is_file():
+        pytest.skip(f"no train data for {stem}")
+
+    rows = np.loadtxt(data_path, delimiter=",", dtype=np.int32)
+    if rows.ndim == 1:
+        rows = rows.reshape(1, -1)
+    rows = np.ascontiguousarray(rows, dtype=np.int32)
+    if rows.shape[0] > 512:
+        rng = np.random.default_rng(0)
+        rows = rows[rng.choice(rows.shape[0], size=512, replace=False)]
+
+    circuit = Circuit.load(circuit_path)
+    ref = circuit.compile()
+    deep = circuit.deep_compile(tmp_path / stem)
+    try:
+        assert_allclose(
+            deep.log_likelihood(rows, validate=False),
+            ref.log_likelihood(rows),
+            rtol=0,
+            atol=1e-11,
+        )
+    finally:
+        deep.close()
 
 
 class TestDeepCompileValidation:

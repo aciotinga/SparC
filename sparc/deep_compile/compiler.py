@@ -10,9 +10,16 @@ import tempfile
 from pathlib import Path
 from typing import Sequence
 
-DEFAULT_FLAGS: tuple[str, ...] = ("-O3", "-std=c11", "-march=native", "-ffast-math")
+import hashlib
+
+from sparc.deep_compile.isa import IsaPlan, merge_compile_flags
+
+FAST_COMPILE_FLAGS: tuple[str, ...] = ("-O2", "-std=c11", "-ffast-math")
+MAX_COMPILE_FLAGS: tuple[str, ...] = ("-O3", "-std=c11", "-march=native", "-ffast-math")
+DEFAULT_FLAGS: tuple[str, ...] = FAST_COMPILE_FLAGS
 
 _RT_DIR = Path(__file__).resolve().parent / "rt"
+_ULTRA_RT_SOURCE = "sparc_ultra_rt.c"
 
 _RT_SCALAR_SOURCES = (
     "sparc_deep_rt_scalar.c",
@@ -77,6 +84,53 @@ def register_dll_search_paths(compiler: str | None = None) -> None:
         prefix = str(bin_dir)
         if prefix.lower() not in path.lower():
             os.environ["PATH"] = prefix + os.pathsep + path
+
+
+def _rt_cache_key(cc: str, isa: IsaPlan, flags: Sequence[str], parallel: bool) -> str:
+    h = hashlib.blake2b(digest_size=16)
+    h.update(Path(cc).resolve().as_posix().encode("utf-8"))
+    h.update(isa.name.encode("ascii"))
+    h.update(b"\x01" if parallel else b"\x00")
+    h.update("\0".join(flags).encode("utf-8"))
+    return h.hexdigest()
+
+
+def _get_ultra_rt_object(
+    cc: str,
+    isa: IsaPlan,
+    *,
+    flags: Sequence[str],
+    parallel: bool,
+    build_dir: Path,
+) -> Path:
+    """Return path to cached sparc_ultra_rt object for this compiler/ISA."""
+    rt_cache = default_cache_dir() / "rt"
+    rt_cache.mkdir(parents=True, exist_ok=True)
+    key = _rt_cache_key(cc, isa, flags, parallel)
+    obj_path = rt_cache / f"sparc_ultra_rt_{isa.name}_{key}.o"
+    if obj_path.is_file():
+        return obj_path
+
+    src = _RT_DIR / _ULTRA_RT_SOURCE
+    extra: list[str] = []
+    if isa.msvc_arch and _is_msvc(cc):
+        extra = [isa.msvc_arch]
+    _compile_object(
+        cc,
+        src,
+        obj_path,
+        include_dir=_RT_DIR,
+        flags=flags,
+        extra_flags=extra,
+        parallel=parallel,
+    )
+    return obj_path
+
+
+def default_cache_dir() -> Path:
+    from sparc.deep_compile.cache import default_cache_dir as _dd
+
+    return _dd()
 
 
 def _windows_mingw_link_flags(*, parallel: bool) -> list[str]:
@@ -236,6 +290,102 @@ def _try_compile_rt_objects(
 
 
 def compile_shared(
+    source_path: Path,
+    output_stem: Path,
+    *,
+    compiler: str | None = None,
+    flags: Sequence[str] = DEFAULT_FLAGS,
+    parallel: bool = False,
+    build_dir: Path | None = None,
+    mode: str = "ultra",
+    isa: IsaPlan | None = None,
+) -> Path:
+    """Compile generated C into a shared library.
+
+    *mode* ``"ultra"`` compiles only the self-contained circuit source.
+    *mode* ``"compat"`` links the legacy SIMD dispatch runtime objects.
+    """
+    if mode == "ultra":
+        if isa is None:
+            from sparc.deep_compile.isa import resolve_isa
+
+            isa = resolve_isa(None)
+        flags = merge_compile_flags(tuple(flags), isa, parallel=parallel)
+        return _compile_ultra_shared(
+            source_path,
+            output_stem,
+            compiler=compiler,
+            flags=flags,
+            parallel=parallel,
+            isa=isa,
+            build_dir=build_dir,
+        )
+    return _compile_compat_shared(
+        source_path,
+        output_stem,
+        compiler=compiler,
+        flags=flags,
+        parallel=parallel,
+        build_dir=build_dir,
+    )
+
+
+def _compile_ultra_shared(
+    source_path: Path,
+    output_stem: Path,
+    *,
+    compiler: str | None,
+    flags: Sequence[str],
+    parallel: bool,
+    isa: IsaPlan,
+    build_dir: Path | None,
+) -> Path:
+    cc = find_compiler(compiler)
+    if cc is None:
+        raise RuntimeError(
+            "no C compiler found; install gcc or clang, or pass compiler=..."
+        )
+
+    source_path = Path(source_path)
+    output_stem = Path(output_stem)
+    lib_path = output_stem.with_suffix(_library_extension())
+
+    own_build_dir = build_dir is None
+    if own_build_dir:
+        build_dir = Path(tempfile.mkdtemp(prefix="sparc_deep_"))
+    else:
+        build_dir = Path(build_dir)
+    build_dir.mkdir(parents=True, exist_ok=True)
+
+    extra: list[str] = []
+    if isa.msvc_arch and _is_msvc(cc):
+        extra = [isa.msvc_arch]
+
+    try:
+        glue_obj = build_dir / "sparc_circuit.o"
+        rt_obj = _get_ultra_rt_object(
+            cc, isa, flags=flags, parallel=parallel, build_dir=build_dir
+        )
+        _compile_object(
+            cc,
+            source_path,
+            glue_obj,
+            include_dir=_RT_DIR,
+            flags=flags,
+            extra_flags=extra,
+            parallel=parallel,
+        )
+        _link_shared(cc, [glue_obj, rt_obj], lib_path, flags=flags, parallel=parallel)
+    finally:
+        if own_build_dir:
+            shutil.rmtree(build_dir, ignore_errors=True)
+
+    if not lib_path.is_file():
+        raise RuntimeError(f"compiler did not produce {lib_path}")
+    return lib_path
+
+
+def _compile_compat_shared(
     source_path: Path,
     output_stem: Path,
     *,

@@ -225,6 +225,12 @@ def main(argv: list[str] | None = None) -> None:
             deep = circuit.deep_compile(compiler=args.compiler)
         deep_ms = (time.perf_counter() - t0) * 1e3
         print(f"  deep_compile()  {deep_ms:8.2f} ms  (ISA: {deep.active_isa})")
+
+        t0 = time.perf_counter()
+        deep_cached = circuit.deep_compile(compiler=args.compiler, use_cache=True)
+        deep_cached_ms = (time.perf_counter() - t0) * 1e3
+        print(f"  deep (cached)   {deep_cached_ms:8.2f} ms")
+        deep_cached.close()
     else:
         print("  deep_compile()  skipped (no C compiler)")
 

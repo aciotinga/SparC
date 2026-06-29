@@ -17,8 +17,8 @@ _ROOT = Path(__file__).resolve().parent
 _PCS = _ROOT / "example_pcs"
 _DATA = _ROOT / "original_datasets"
 
-WARMUP = 0
-REPEATS = 1
+WARMUP = 2
+REPEATS = 5
 
 
 def _best_ms(fn) -> float:
@@ -62,7 +62,9 @@ def main() -> None:
         if has_deep:
             deep = circuit.deep_compile()
             try:
-                deep_ms = _best_ms(lambda: ll(rows, deep.log_likelihood))
+                deep_ms = _best_ms(
+                    lambda: ll(rows, lambda ev, fn=deep.log_likelihood: fn(ev, validate=False))
+                )
             finally:
                 deep.close()
             line += f" {deep_ms:10.2f}"

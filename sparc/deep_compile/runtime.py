@@ -6,8 +6,9 @@ import ctypes
 import os
 import platform
 import tempfile
+import warnings
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Literal, Optional, Sequence
 
 import numpy as np
 
@@ -17,13 +18,29 @@ from sparc.deep_compile.compiler import (
     compile_shared,
     register_dll_search_paths,
 )
-from sparc.deep_compile.emitter import NODE_INPUT, emit_c_source, leaf_var_order
+from sparc.deep_compile.cache import (
+    build_cache_key,
+    copy_to_stem,
+    store_cached,
+    try_load_cached,
+)
+from sparc.deep_compile.emitter import NODE_INPUT, emit_c_source
+from sparc.deep_compile.isa import (
+    IsaPlan,
+    compile_flags_for_opt,
+    merge_compile_flags,
+    resolve_isa,
+)
 from sparc.deep_compile.tape import TapeLayout, fill_linear_tape, fill_log_tape, make_tape_buffers
 
 try:
-    from sparc.deep_compile._native import fill_leaf_ev as _fill_leaf_ev_cython
+    from sparc.deep_compile._native import (
+        eval_log_likelihood_batch as _eval_log_batch_cython,
+        eval_likelihood_batch as _eval_lin_batch_cython,
+    )
 except ImportError:
-    _fill_leaf_ev_cython = None
+    _eval_log_batch_cython = None
+    _eval_lin_batch_cython = None
 
 _DEEP_DATA_ERROR = (
     "deep-compiled circuits require fully observed integer assignments"
@@ -35,6 +52,9 @@ _F64_PTR = ctypes.POINTER(ctypes.c_double)
 
 _L3_BUDGET_BYTES = 8 * 1024 * 1024
 _MIN_TILE = 32
+
+PerformanceMode = Literal["max", "balanced"]
+CompileOpt = Literal["fast", "max"]
 
 
 def _coerce_deep_data(data: np.ndarray, *, allow_1d: bool) -> np.ndarray:
@@ -129,9 +149,16 @@ def _effective_exec_params(
     n_rows: int,
     tile: int,
     parallel: bool,
+    *,
+    performance: PerformanceMode,
 ) -> tuple[int, bool]:
-    """Adapt tile size and OpenMP use to keep workspace within cache budget."""
+    """Adapt tile size and OpenMP use; ``performance='max'`` disables L3 cap."""
     tile = max(_MIN_TILE, int(tile))
+    if performance == "max":
+        if parallel and n_rows < (os.cpu_count() or 1) * tile:
+            parallel = False
+        return tile, parallel
+
     n_threads = (os.cpu_count() or 1) if parallel else 1
     ws_bytes = n_nodes * tile * 8 * n_threads
     if parallel and ws_bytes > _L3_BUDGET_BYTES:
@@ -158,6 +185,9 @@ class DeepCompiledCircuit:
         *,
         tile: int = 128,
         parallel: bool = True,
+        performance: PerformanceMode = "max",
+        isa_plan: IsaPlan,
+        mode: str = "ultra",
         artifact_tmpdir: tempfile.TemporaryDirectory[str] | None = None,
     ):
         self._compiled = compiled
@@ -169,14 +199,15 @@ class DeepCompiledCircuit:
         self.variables = list(compiled.variables)
         self.tile = int(tile)
         self.parallel = bool(parallel)
+        self.performance = performance
+        self._mode = mode
+        self._isa_plan = isa_plan
         self._artifact_tmpdir = artifact_tmpdir
         self._closed = False
 
         self._tape_lin, self._tape_log = make_tape_buffers(self._snap)
         self._workspace = np.empty(self._layout.n_nodes, dtype=np.float64)
         self._workspace_rows = 1
-        self._leaf_ev_buffer = np.empty(0, dtype=np.int32)
-        self._leaf_vars = np.asarray(leaf_var_order(self._snap), dtype=np.int32)
         self._col_for_var: Optional[np.ndarray] = None
         self._col_cache_key: Optional[tuple] = None
         self._validated_once = False
@@ -190,59 +221,75 @@ class DeepCompiledCircuit:
                 "On Windows with MinGW/gcc, ensure the compiler bin directory is on "
                 "PATH or reinstall with parallel=True (static OpenMP link)."
             ) from exc
+
         lib.sparc_likelihood_row.argtypes = [_TAPE_PTR, _I32_PTR]
         lib.sparc_likelihood_row.restype = ctypes.c_double
         lib.sparc_log_likelihood_row.argtypes = [_TAPE_PTR, _I32_PTR]
         lib.sparc_log_likelihood_row.restype = ctypes.c_double
 
-        batch_args = [
-            _TAPE_PTR,
-            _I32_PTR,
-            ctypes.c_int32,
-            ctypes.c_int32,
-            _F64_PTR,
-            _F64_PTR,
-            ctypes.c_int32,
-            ctypes.c_int32,
-        ]
-        lib.sparc_likelihood_batch.argtypes = batch_args
-        lib.sparc_likelihood_batch.restype = None
-        lib.sparc_log_likelihood_batch.argtypes = batch_args
-        lib.sparc_log_likelihood_batch.restype = None
+        if mode == "ultra":
+            ultra_batch_args = [
+                _TAPE_PTR,
+                _I32_PTR,
+                ctypes.c_int32,
+                _I32_PTR,
+                ctypes.c_int32,
+                _F64_PTR,
+                _F64_PTR,
+                ctypes.c_int32,
+                ctypes.c_int32,
+            ]
+            lib.sparc_likelihood_batch.argtypes = ultra_batch_args
+            lib.sparc_likelihood_batch.restype = None
+            lib.sparc_log_likelihood_batch.argtypes = ultra_batch_args
+            lib.sparc_log_likelihood_batch.restype = None
+            self._lin_batch_ptr = ctypes.cast(
+                lib.sparc_likelihood_batch, ctypes.c_void_p
+            ).value or 0
+            self._log_batch_ptr = ctypes.cast(
+                lib.sparc_log_likelihood_batch, ctypes.c_void_p
+            ).value or 0
+        else:
+            compat_batch_args = [
+                _TAPE_PTR,
+                _I32_PTR,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                _F64_PTR,
+                _F64_PTR,
+                ctypes.c_int32,
+                ctypes.c_int32,
+            ]
+            lib.sparc_likelihood_batch.argtypes = compat_batch_args
+            lib.sparc_likelihood_batch.restype = None
+            lib.sparc_log_likelihood_batch.argtypes = compat_batch_args
+            lib.sparc_log_likelihood_batch.restype = None
+            self._lin_batch_ptr = 0
+            self._log_batch_ptr = 0
 
-        lib.sparc_init_dispatch.argtypes = []
-        lib.sparc_init_dispatch.restype = None
-        lib.sparc_active_isa_name.argtypes = []
-        lib.sparc_active_isa_name.restype = ctypes.c_char_p
-        lib.sparc_force_isa.argtypes = [ctypes.c_char_p]
-        lib.sparc_force_isa.restype = None
         lib.sparc_workspace_doubles.argtypes = [
             ctypes.c_int32, ctypes.c_int32, ctypes.c_int32,
         ]
         lib.sparc_workspace_doubles.restype = ctypes.c_int32
-        lib.sparc_fill_leaf_ev_batch.argtypes = [
-            _I32_PTR,
-            ctypes.c_int32,
-            ctypes.c_int32,
-            _I32_PTR,
-            _I32_PTR,
-            ctypes.c_int32,
-            _I32_PTR,
-            ctypes.c_int32,
-        ]
-        lib.sparc_fill_leaf_ev_batch.restype = None
+        lib.sparc_active_isa_name.argtypes = []
+        lib.sparc_active_isa_name.restype = ctypes.c_char_p
 
-        isa_override = os.environ.get("SPARC_DEEP_ISA")
-        if isa_override:
-            lib.sparc_force_isa(isa_override.encode("ascii"))
-        lib.sparc_init_dispatch()
+        if mode == "compat":
+            lib.sparc_init_dispatch.argtypes = []
+            lib.sparc_init_dispatch.restype = None
+            lib.sparc_force_isa.argtypes = [ctypes.c_char_p]
+            lib.sparc_force_isa.restype = None
+            isa_override = os.environ.get("SPARC_DEEP_ISA")
+            if isa_override:
+                lib.sparc_force_isa(isa_override.encode("ascii"))
+            lib.sparc_init_dispatch()
+
         self._active_isa = lib.sparc_active_isa_name().decode("ascii")
-
         self._lib = lib
 
     @property
     def active_isa(self) -> str:
-        """Name of the SIMD path selected at load (scalar, avx2, avx512)."""
+        """ISA the native library was compiled for (or dispatch-selected in compat)."""
         return self._active_isa
 
     def refresh_parameters(self) -> None:
@@ -285,38 +332,6 @@ class DeepCompiledCircuit:
             self._workspace = np.empty(need, dtype=np.float64)
         self._workspace_rows = n_rows
         return self._workspace
-
-    def _extract_leaf_ev(
-        self,
-        data: np.ndarray,
-        col_for_var: np.ndarray,
-        n_rows: int,
-    ) -> np.ndarray:
-        n_leaf = self._leaf_vars.shape[0]
-        need = (n_leaf, n_rows)
-        if self._leaf_ev_buffer.shape != need:
-            if self._leaf_ev_buffer.size < n_leaf * n_rows:
-                self._leaf_ev_buffer = np.empty(need, dtype=np.int32)
-            else:
-                self._leaf_ev_buffer = self._leaf_ev_buffer.reshape(need)
-        leaf_ev = self._leaf_ev_buffer
-        n_cols = data.shape[1]
-        if n_leaf == 0:
-            return leaf_ev
-        if _fill_leaf_ev_cython is not None:
-            _fill_leaf_ev_cython(data, col_for_var, self._leaf_vars, leaf_ev)
-            return np.ascontiguousarray(leaf_ev, dtype=np.int32)
-        self._lib.sparc_fill_leaf_ev_batch(
-            data.ctypes.data_as(_I32_PTR),
-            ctypes.c_int32(n_cols),
-            ctypes.c_int32(n_rows),
-            col_for_var.ctypes.data_as(_I32_PTR),
-            self._leaf_vars.ctypes.data_as(_I32_PTR),
-            ctypes.c_int32(n_leaf),
-            leaf_ev.ctypes.data_as(_I32_PTR),
-            ctypes.c_int32(n_rows),
-        )
-        return leaf_ev
 
     def close(self) -> None:
         """Unload the native library and remove managed build artifacts."""
@@ -382,23 +397,17 @@ class DeepCompiledCircuit:
             raise RuntimeError("deep-compiled circuit is closed")
         arr = _coerce_deep_data(data, allow_1d=True)
         tape = self._tape_log if log_space else self._tape_lin
-        tape_ptr = tape.ctypes.data_as(_TAPE_PTR)
         row_fn = (
             self._lib.sparc_log_likelihood_row
             if log_space
             else self._lib.sparc_likelihood_row
-        )
-        batch_fn = (
-            self._lib.sparc_log_likelihood_batch
-            if log_space
-            else self._lib.sparc_likelihood_batch
         )
 
         if arr.ndim == 1:
             if validate:
                 _validate_row(arr, self._snap)
             ev = np.ascontiguousarray(arr, dtype=np.int32)
-            return row_fn(tape_ptr, ev.ctypes.data_as(_I32_PTR))
+            return row_fn(tape.ctypes.data_as(_TAPE_PTR), ev.ctypes.data_as(_I32_PTR))
 
         n_rows, n_cols = arr.shape
         col_for_var = self._get_col_for_var(var_to_col, n_cols)
@@ -406,13 +415,114 @@ class DeepCompiledCircuit:
             _validate_batch(arr, self._snap, col_for_var)
             self._validated_once = True
         tile, parallel = _effective_exec_params(
-            self._layout.n_nodes, n_rows, self.tile, self.parallel
+            self._layout.n_nodes,
+            n_rows,
+            self.tile,
+            self.parallel,
+            performance=self.performance,
         )
-        leaf_ev = self._extract_leaf_ev(arr, col_for_var, n_rows)
         workspace = self._ensure_workspace(n_rows, tile, parallel)
         out = np.empty(n_rows, dtype=np.float64)
+
+        if self._mode == "ultra":
+            self._run_ultra_batch(
+                log_space=log_space,
+                tape=tape,
+                data=arr,
+                col_for_var=col_for_var,
+                workspace=workspace,
+                out=out,
+                tile=tile,
+                parallel=parallel,
+            )
+        else:
+            self._run_compat_batch(
+                log_space=log_space,
+                tape=tape,
+                data=arr,
+                col_for_var=col_for_var,
+                workspace=workspace,
+                out=out,
+                tile=tile,
+                parallel=parallel,
+            )
+        return out
+
+    def _run_ultra_batch(
+        self,
+        *,
+        log_space: bool,
+        tape: np.ndarray,
+        data: np.ndarray,
+        col_for_var: np.ndarray,
+        workspace: np.ndarray,
+        out: np.ndarray,
+        tile: int,
+        parallel: bool,
+    ) -> None:
+        fn_ptr = self._log_batch_ptr if log_space else self._lin_batch_ptr
+        eval_cython = _eval_log_batch_cython if log_space else _eval_lin_batch_cython
+        n_cols = data.shape[1]
+        par_i = 1 if parallel else 0
+
+        if eval_cython is not None and fn_ptr:
+            eval_cython(
+                fn_ptr,
+                tape,
+                data,
+                col_for_var,
+                workspace,
+                out,
+                tile,
+                par_i,
+            )
+            return
+
+        batch_fn = (
+            self._lib.sparc_log_likelihood_batch
+            if log_space
+            else self._lib.sparc_likelihood_batch
+        )
         batch_fn(
-            tape_ptr,
+            tape.ctypes.data_as(_TAPE_PTR),
+            data.ctypes.data_as(_I32_PTR),
+            ctypes.c_int32(n_cols),
+            col_for_var.ctypes.data_as(_I32_PTR),
+            ctypes.c_int32(data.shape[0]),
+            workspace.ctypes.data_as(_F64_PTR),
+            out.ctypes.data_as(_F64_PTR),
+            ctypes.c_int32(tile),
+            ctypes.c_int32(par_i),
+        )
+
+    def _run_compat_batch(
+        self,
+        *,
+        log_space: bool,
+        tape: np.ndarray,
+        data: np.ndarray,
+        col_for_var: np.ndarray,
+        workspace: np.ndarray,
+        out: np.ndarray,
+        tile: int,
+        parallel: bool,
+    ) -> None:
+        from sparc.deep_compile.compat_emitter import leaf_var_order
+
+        n_rows = data.shape[0]
+        n_leaf = len(leaf_var_order(self._snap))
+        leaf_ev = np.empty((n_leaf, n_rows), dtype=np.int32)
+        leaf_vars = np.asarray(leaf_var_order(self._snap), dtype=np.int32)
+        for i, var in enumerate(leaf_vars):
+            leaf_ev[i, :] = data[:, col_for_var[var]]
+
+        batch_fn = (
+            self._lib.sparc_log_likelihood_batch
+            if log_space
+            else self._lib.sparc_likelihood_batch
+        )
+        batch_fn(
+            tape.ctypes.data_as(_TAPE_PTR),
             leaf_ev.ctypes.data_as(_I32_PTR),
             ctypes.c_int32(n_rows),
             ctypes.c_int32(n_rows),
@@ -421,7 +531,6 @@ class DeepCompiledCircuit:
             ctypes.c_int32(tile),
             ctypes.c_int32(1 if parallel else 0),
         )
-        return out
 
 
 def deep_compile_circuit(
@@ -429,53 +538,145 @@ def deep_compile_circuit(
     path: str | Path | None = None,
     *,
     compiler: str | None = None,
-    flags: Sequence[str] = DEFAULT_FLAGS,
+    flags: Sequence[str] | None = None,
     parallel: bool = True,
-    simd: str = "multi",
     tile: int = 128,
+    isa: str | None = None,
+    performance: PerformanceMode = "max",
+    compile_opt: CompileOpt = "fast",
+    mode: str = "ultra",
+    simd: str | None = None,
+    use_cache: bool = True,
 ) -> DeepCompiledCircuit:
     """Build, emit, compile, and load a deep-compiled circuit.
 
-  When *path* is omitted, build artifacts live in a managed temporary
-  directory that is removed by :meth:`DeepCompiledCircuit.close`.
+    When *path* is omitted, build artifacts live in a managed temporary
+    directory that is removed by :meth:`DeepCompiledCircuit.close`.
     """
     from sparc.circuit import Circuit
+    from sparc.deep_compile.compiler import _library_extension
 
     if isinstance(root, Circuit):
         root = root.root
+
+    if simd is not None:
+        warnings.warn(
+            "simd= is deprecated; use isa= instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        isa = simd if simd != "multi" else isa
+
+    base_flags = tuple(flags) if flags is not None else compile_flags_for_opt(compile_opt)
+    if mode == "ultra":
+        isa_plan = resolve_isa(isa)
+        compile_flags = merge_compile_flags(base_flags, isa_plan, parallel=parallel)
+    else:
+        isa_plan = resolve_isa(isa if isa not in (None, "multi") else None)
+        compile_flags = base_flags
+
     compiled = CompiledCircuit(root)
     snap = compiled.codegen_snapshot()
-    source = emit_c_source(snap, parallel=parallel, tile=tile)
+
+    lib_suffix = _library_extension()
+    cache_key: str | None = None
+    cached: tuple[Path, Path] | None = None
+    if use_cache and mode == "ultra":
+        cache_key = build_cache_key(
+            snap,
+            isa=isa_plan.name,
+            parallel=parallel,
+            tile=tile,
+            compile_opt=compile_opt,
+            mode=mode,
+            flags=compile_flags,
+        )
+        cached = try_load_cached(cache_key, lib_suffix=lib_suffix)
+
+    source: str | None = None
+    if cached is None:
+        source = emit_c_source(
+            snap,
+            isa=isa_plan if mode == "ultra" else None,
+            parallel=parallel,
+            tile=tile,
+            mode=mode,
+        )
 
     artifact_tmpdir: tempfile.TemporaryDirectory[str] | None = None
     if path is None:
-        artifact_tmpdir = tempfile.TemporaryDirectory(
-            prefix="sparc_deep_", ignore_cleanup_errors=True
-        )
-        stem = Path(artifact_tmpdir.name) / "circuit"
+        if cached is not None:
+            source_path, library_path = cached
+        else:
+            artifact_tmpdir = tempfile.TemporaryDirectory(
+                prefix="sparc_deep_", ignore_cleanup_errors=True
+            )
+            stem = Path(artifact_tmpdir.name) / "circuit"
+            source_path = stem.with_suffix(".c")
+            source_path.write_text(source, encoding="utf-8")
+            library_path = compile_shared(
+                source_path,
+                stem,
+                compiler=compiler,
+                flags=compile_flags,
+                parallel=parallel,
+                mode=mode,
+                isa=isa_plan if mode == "ultra" else None,
+            )
+            if cache_key is not None:
+                source_path, library_path = store_cached(
+                    cache_key,
+                    source_text=source,
+                    source_path=source_path,
+                    library_path=library_path,
+                    metadata={
+                        "isa": isa_plan.name,
+                        "parallel": parallel,
+                        "tile": tile,
+                        "compile_opt": compile_opt,
+                    },
+                )
     else:
         stem = Path(path)
+        if cached is not None:
+            source_path, library_path = copy_to_stem(
+                cached[1], cached[0], stem, lib_suffix=lib_suffix
+            )
+        else:
+            source_path = stem.with_suffix(".c")
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_text(source, encoding="utf-8")
+            library_path = compile_shared(
+                source_path,
+                stem,
+                compiler=compiler,
+                flags=compile_flags,
+                parallel=parallel,
+                mode=mode,
+                isa=isa_plan if mode == "ultra" else None,
+            )
+            if cache_key is not None:
+                store_cached(
+                    cache_key,
+                    source_text=source,
+                    source_path=source_path,
+                    library_path=library_path,
+                    metadata={
+                        "isa": isa_plan.name,
+                        "parallel": parallel,
+                        "tile": tile,
+                        "compile_opt": compile_opt,
+                    },
+                )
 
-    source_path = stem.with_suffix(".c")
-    source_path.parent.mkdir(parents=True, exist_ok=True)
-    source_path.write_text(source, encoding="utf-8")
-    library_path = compile_shared(
-        source_path,
-        stem,
-        compiler=compiler,
-        flags=flags,
-        parallel=parallel,
-    )
-    deep = DeepCompiledCircuit(
+    return DeepCompiledCircuit(
         compiled,
         source_path,
         library_path,
         tile=tile,
         parallel=parallel,
+        performance=performance,
+        isa_plan=isa_plan,
+        mode=mode,
         artifact_tmpdir=artifact_tmpdir,
     )
-    if simd != "multi":
-        deep._lib.sparc_force_isa(simd.encode("ascii"))
-        deep._lib.sparc_init_dispatch()
-        deep._active_isa = deep._lib.sparc_active_isa_name().decode("ascii")
-    return deep
