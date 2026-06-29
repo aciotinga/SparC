@@ -39,7 +39,7 @@ def test_region_embedding_builder_categorical():
         alpha=1.0,
     ).build()
 
-    scope = circuit.root.scope_as_list()
+    scope = circuit.scope_as_list()
     assert len(scope) == num_vars
     assignment = _full_assignment(scope)
     ll = circuit.likelihood(assignment)
@@ -66,7 +66,7 @@ def test_region_embedding_builder_binomial():
         input_distribution="binomial",
     ).build()
 
-    scope = circuit.root.scope_as_list()
+    scope = circuit.scope_as_list()
     assignment = _full_assignment(scope)
     assert circuit.likelihood(assignment) > 0.0
 
@@ -91,7 +91,7 @@ def test_region_embedding_builder_scope_offset():
         scope_offset=offset,
     ).build()
 
-    assert set(circuit.root.scope_as_list()) == {offset, offset + 1}
+    assert set(circuit.scope_as_list()) == {offset, offset + 1}
 
 
 def test_embedding_builder_categorical():
@@ -110,7 +110,7 @@ def test_embedding_builder_categorical():
         alpha=1.0,
     ).build()
 
-    scope = set(circuit.root.scope_as_list())
+    scope = set(circuit.scope_as_list())
     assert scope == set(range(num_vars))
     assignment = _full_assignment(scope)
     assert circuit.likelihood(assignment) > 0.0
@@ -131,5 +131,5 @@ def test_embedding_builder_with_reuse():
         alpha=1.0,
     ).build()
 
-    assignment = _full_assignment(circuit.root.scope_as_list())
+    assignment = _full_assignment(circuit.scope_as_list())
     assert math.isfinite(circuit.log_likelihood(assignment))

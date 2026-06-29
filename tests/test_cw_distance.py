@@ -77,50 +77,50 @@ def _project_to_simplex_tangent(g):
 
 class TestCWDistanceSmoke:
     def test_identical_leaves_zero(self):
-        leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
+        leaf = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
         assert cw_distance(leaf, leaf) == pytest.approx(0.0, abs=1e-12)
 
     def test_leaf_matches_brute_force(self):
         p = [0.3, 0.7]
         q = [0.55, 0.45]
-        leaf1 = CategoricalInputNode(id=0, scope_var=0, probabilities=p)
-        leaf2 = CategoricalInputNode(id=1, scope_var=0, probabilities=q)
+        leaf1 = CategoricalInputNode(scope_var=0, probabilities=p)
+        leaf2 = CategoricalInputNode(scope_var=0, probabilities=q)
         expected = _brute_force_cw_leaf(p, q)
         assert_allclose(cw_distance(leaf1, leaf2), expected, rtol=0, atol=1e-12)
 
     def test_leaf_unequal_cardinality(self):
         p = [0.2, 0.3, 0.5]
         q = [0.6, 0.4]
-        leaf1 = CategoricalInputNode(id=0, scope_var=0, probabilities=p)
-        leaf2 = CategoricalInputNode(id=1, scope_var=0, probabilities=q)
+        leaf1 = CategoricalInputNode(scope_var=0, probabilities=p)
+        leaf2 = CategoricalInputNode(scope_var=0, probabilities=q)
         expected = _brute_force_cw_leaf(p, q)
         assert_allclose(cw_distance(leaf1, leaf2), expected, rtol=0, atol=1e-12)
 
     def test_symmetry(self):
-        leaf1 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.25, 0.75])
-        leaf2 = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.6, 0.4])
+        leaf1 = CategoricalInputNode(scope_var=0, probabilities=[0.25, 0.75])
+        leaf2 = CategoricalInputNode(scope_var=0, probabilities=[0.6, 0.4])
         assert_allclose(
             cw_distance(leaf1, leaf2), cw_distance(leaf2, leaf1), rtol=0, atol=1e-12
         )
 
     def test_sum_sum_forward_parity(self):
-        c1a = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.8, 0.15, 0.05])
-        c1b = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.2, 0.3, 0.5])
-        circ1 = SumNode(id=2, children=[c1a, c1b], parameters=[0.35, 0.65])
-        c2a = CategoricalInputNode(id=3, scope_var=0, probabilities=[0.1, 0.6, 0.3])
-        c2b = CategoricalInputNode(id=4, scope_var=0, probabilities=[0.7, 0.2, 0.1])
-        circ2 = SumNode(id=5, children=[c2a, c2b], parameters=[0.4, 0.6])
+        c1a = CategoricalInputNode(scope_var=0, probabilities=[0.8, 0.15, 0.05])
+        c1b = CategoricalInputNode(scope_var=0, probabilities=[0.2, 0.3, 0.5])
+        circ1 = SumNode(children=[c1a, c1b], parameters=[0.35, 0.65])
+        c2a = CategoricalInputNode(scope_var=0, probabilities=[0.1, 0.6, 0.3])
+        c2b = CategoricalInputNode(scope_var=0, probabilities=[0.7, 0.2, 0.1])
+        circ2 = SumNode(children=[c2a, c2b], parameters=[0.4, 0.6])
         v_ref = cw_distance(circ1, circ2)
         v_grad, _ = cw_distance_and_grad(circ1, circ2)
         assert_allclose(v_grad, v_ref, rtol=0, atol=1e-10)
 
     def test_product_product(self):
-        c1a = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.4, 0.6])
-        c1b = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.7, 0.3])
-        circ1 = ProductNode(id=2, children=[c1a, c1b])
-        c2a = CategoricalInputNode(id=3, scope_var=0, probabilities=[0.2, 0.8])
-        c2b = CategoricalInputNode(id=4, scope_var=1, probabilities=[0.55, 0.45])
-        circ2 = ProductNode(id=5, children=[c2a, c2b])
+        c1a = CategoricalInputNode(scope_var=0, probabilities=[0.4, 0.6])
+        c1b = CategoricalInputNode(scope_var=1, probabilities=[0.7, 0.3])
+        circ1 = ProductNode(children=[c1a, c1b])
+        c2a = CategoricalInputNode(scope_var=0, probabilities=[0.2, 0.8])
+        c2b = CategoricalInputNode(scope_var=1, probabilities=[0.55, 0.45])
+        circ2 = ProductNode(children=[c2a, c2b])
         v_ref = cw_distance(circ1, circ2)
         v_grad, _ = cw_distance_and_grad(circ1, circ2)
         assert_allclose(v_grad, v_ref, rtol=0, atol=1e-10)
@@ -128,8 +128,8 @@ class TestCWDistanceSmoke:
     def test_metric_scale_factor(self):
         p = [0.3, 0.7]
         q = [0.55, 0.45]
-        leaf1 = CategoricalInputNode(id=0, scope_var=0, probabilities=p)
-        leaf2 = CategoricalInputNode(id=1, scope_var=0, probabilities=q)
+        leaf1 = CategoricalInputNode(scope_var=0, probabilities=p)
+        leaf2 = CategoricalInputNode(scope_var=0, probabilities=q)
         base = cw_distance(leaf1, leaf2, metric_p=1.0, scale_factor=1.0)
         scaled = cw_distance(leaf1, leaf2, metric_p=1.0, scale_factor=2.0)
         assert_allclose(scaled, base / 2.0, rtol=0, atol=1e-12)
@@ -137,34 +137,34 @@ class TestCWDistanceSmoke:
 
 class TestCWCompatibilityErrors:
     def test_type_mismatch_sum_product(self):
-        leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-        prod = ProductNode(id=1, children=[leaf])
-        summ = SumNode(id=2, children=[leaf], parameters=[1.0])
+        leaf = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        prod = ProductNode(children=[leaf])
+        summ = SumNode(children=[leaf], parameters=[1.0])
         with pytest.raises(ValueError, match="CW incompatible"):
             cw_distance(summ, prod)
 
     def test_type_mismatch_leaf_product(self):
-        leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-        prod = ProductNode(id=1, children=[leaf])
+        leaf = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        prod = ProductNode(children=[leaf])
         with pytest.raises(ValueError, match="CW incompatible"):
             cw_distance(leaf, prod)
 
     def test_product_scope_mismatch(self):
-        c1a = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-        c1b = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
-        p1 = ProductNode(id=2, children=[c1a, c1b])
-        c2a = CategoricalInputNode(id=3, scope_var=0, probabilities=[0.5, 0.5])
-        c2b = CategoricalInputNode(id=4, scope_var=2, probabilities=[0.5, 0.5])
-        p2 = ProductNode(id=5, children=[c2a, c2b])
+        c1a = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        c1b = CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5])
+        p1 = ProductNode(children=[c1a, c1b])
+        c2a = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        c2b = CategoricalInputNode(scope_var=2, probabilities=[0.5, 0.5])
+        p2 = ProductNode(children=[c2a, c2b])
         with pytest.raises(ValueError, match="CW incompatible"):
             cw_distance(p1, p2)
 
     def test_product_child_count_mismatch(self):
-        c1a = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-        c1b = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
-        p1 = ProductNode(id=2, children=[c1a, c1b])
-        c2a = CategoricalInputNode(id=3, scope_var=0, probabilities=[0.5, 0.5])
-        p2 = ProductNode(id=4, children=[c2a])
+        c1a = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        c1b = CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5])
+        p1 = ProductNode(children=[c1a, c1b])
+        c2a = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        p2 = ProductNode(children=[c2a])
         with pytest.raises(ValueError, match="CW incompatible"):
             cw_distance(p1, p2)
 
@@ -174,13 +174,13 @@ class TestCWGradients:
         rng = np.random.default_rng(42)
         p_fixed = rng.dirichlet([1.5, 1.0, 0.7])
         q_init = rng.dirichlet([1.0, 1.2, 0.9])
-        leaf1 = CategoricalInputNode(id=0, scope_var=0, probabilities=list(p_fixed))
+        leaf1 = CategoricalInputNode(scope_var=0, probabilities=list(p_fixed))
 
         def f_value(probs):
-            leaf = CategoricalInputNode(id=1, scope_var=0, probabilities=list(probs))
+            leaf = CategoricalInputNode(scope_var=0, probabilities=list(probs))
             return cw_distance(leaf1, leaf)
 
-        leaf2 = CategoricalInputNode(id=1, scope_var=0, probabilities=list(q_init))
+        leaf2 = CategoricalInputNode(scope_var=0, probabilities=list(q_init))
         _, grads = cw_distance_and_grad(leaf1, leaf2)
         assert 1 in grads.cat_grads
         g = _project_to_simplex_tangent(grads.cat_grads[1])
@@ -194,10 +194,9 @@ class TestCWGradients:
         p1 = rng.dirichlet([1.0, 1.0, 1.0])
         p2 = rng.dirichlet([1.0, 1.0, 1.0])
         circ1 = SumNode(
-            id=2,
             children=[
-                CategoricalInputNode(id=0, scope_var=0, probabilities=list(p1)),
-                CategoricalInputNode(id=1, scope_var=0, probabilities=list(p2)),
+                CategoricalInputNode(scope_var=0, probabilities=list(p1)),
+                CategoricalInputNode(scope_var=0, probabilities=list(p2)),
             ],
             parameters=[0.3, 0.7],
         )
@@ -207,20 +206,18 @@ class TestCWGradients:
             return cw_distance(
                 circ1,
                 SumNode(
-                    id=5,
                     children=[
-                        CategoricalInputNode(id=3, scope_var=0, probabilities=list(q1)),
-                        CategoricalInputNode(id=4, scope_var=0, probabilities=list(q2)),
+                        CategoricalInputNode(scope_var=0, probabilities=list(q1)),
+                        CategoricalInputNode(scope_var=0, probabilities=list(q2)),
                     ],
                     parameters=list(phi),
                 ),
             )
 
         circ2 = SumNode(
-            id=5,
             children=[
-                CategoricalInputNode(id=3, scope_var=0, probabilities=list(q1)),
-                CategoricalInputNode(id=4, scope_var=0, probabilities=list(q2)),
+                CategoricalInputNode(scope_var=0, probabilities=list(q1)),
+                CategoricalInputNode(scope_var=0, probabilities=list(q2)),
             ],
             parameters=list(phi_init),
         )
@@ -233,13 +230,12 @@ class TestCWGradients:
     def test_product_leaf_grad_matches_fd(self):
         rng = np.random.default_rng(99)
         circ1 = ProductNode(
-            id=2,
             children=[
                 CategoricalInputNode(
-                    id=0, scope_var=0, probabilities=list(rng.dirichlet([1.0, 1.0]))
+                    scope_var=0, probabilities=list(rng.dirichlet([1.0, 1.0]))
                 ),
                 CategoricalInputNode(
-                    id=1, scope_var=1, probabilities=list(rng.dirichlet([1.0, 1.0]))
+                    scope_var=1, probabilities=list(rng.dirichlet([1.0, 1.0]))
                 ),
             ],
         )
@@ -250,19 +246,17 @@ class TestCWGradients:
             return cw_distance(
                 circ1,
                 ProductNode(
-                    id=5,
                     children=[
-                        CategoricalInputNode(id=3, scope_var=0, probabilities=list(probs)),
-                        CategoricalInputNode(id=4, scope_var=1, probabilities=other_q),
+                        CategoricalInputNode(scope_var=0, probabilities=list(probs)),
+                        CategoricalInputNode(scope_var=1, probabilities=other_q),
                     ],
                 ),
             )
 
         circ2 = ProductNode(
-            id=5,
             children=[
-                CategoricalInputNode(id=3, scope_var=0, probabilities=list(q_init)),
-                CategoricalInputNode(id=4, scope_var=1, probabilities=other_q),
+                CategoricalInputNode(scope_var=0, probabilities=list(q_init)),
+                CategoricalInputNode(scope_var=1, probabilities=other_q),
             ],
         )
         _, grads = cw_distance_and_grad(circ1, circ2)
@@ -274,16 +268,16 @@ class TestCWGradients:
     def test_descent_decreases_cw_distance(self):
         rng = np.random.default_rng(2026)
         leaf_ref = CategoricalInputNode(
-            id=0, scope_var=0, probabilities=list(rng.dirichlet([1.0, 1.0, 1.0]))
+            scope_var=0, probabilities=list(rng.dirichlet([1.0, 1.0, 1.0]))
         )
         q = rng.dirichlet([1.0, 1.0, 1.0])
         lr = 0.05
         history = []
         for _ in range(8):
-            leaf_learn = CategoricalInputNode(id=1, scope_var=0, probabilities=list(q))
+            leaf_learn = CategoricalInputNode(scope_var=0, probabilities=list(q))
             value, grads = cw_distance_and_grad(leaf_ref, leaf_learn)
             history.append(value)
-            g = _project_to_simplex_tangent(grads.cat_grads[1])
+            g = _project_to_simplex_tangent(grads.cat_grads[int(leaf_learn.id)])
             q = q - lr * g
             q = np.clip(q, 1e-6, None)
             q = q / q.sum()

@@ -18,7 +18,7 @@ from typing import Optional
 import numpy as np
 
 from sparc.builders._factory import _NodeFactory
-from sparc.circuit import Circuit
+from sparc.nodes import CircuitNode
 from sparc.structures._blocks import (
     input_block,
     product_block,
@@ -38,7 +38,7 @@ def _build_chain(
     num_latents: int,
     emission: InputDistribution,
     concentration: float,
-) -> Circuit:
+) -> CircuitNode:
     if seq_length < 1:
         raise ValueError("seq_length must be >= 1")
     if num_latents < 1:
@@ -61,7 +61,7 @@ def HMM(
     *,
     sum_concentration: float = 1.0,
     seed: Optional[int] = None,
-) -> Circuit:
+) -> CircuitNode:
     """A hidden Markov model with categorical emissions over ``num_emits`` symbols.
 
     Parameters
@@ -94,7 +94,7 @@ def GeneralizedHMM(
     num_cats: int = 256,
     sum_concentration: float = 1.0,
     seed: Optional[int] = None,
-) -> Circuit:
+) -> CircuitNode:
     """A hidden Markov model with an arbitrary finite-discrete emission family.
 
     Same chain topology as :func:`HMM`, but emissions are produced by

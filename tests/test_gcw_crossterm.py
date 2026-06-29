@@ -48,36 +48,34 @@ def _brute_force_crossterm(p, q, d_p, d_q):
 
 class TestGCWCrosstermSmoke:
     def test_identical_leaves(self):
-        leaf1 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-        leaf2 = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.5, 0.5])
+        leaf1 = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        leaf2 = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
         cross = gcw_crossterm(leaf1, leaf2)
         assert np.isfinite(cross)
         assert cross >= -1e-8
 
     def test_sum_to_sum(self):
-        c1a = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.8, 0.2])
-        c1b = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.3, 0.7])
-        circ1 = SumNode(id=2, children=[c1a, c1b], parameters=[0.5, 0.5])
-        c2a = CategoricalInputNode(id=3, scope_var=0, probabilities=[0.6, 0.4])
-        c2b = CategoricalInputNode(id=4, scope_var=0, probabilities=[0.1, 0.9])
-        circ2 = SumNode(id=5, children=[c2a, c2b], parameters=[0.4, 0.6])
+        c1a = CategoricalInputNode(scope_var=0, probabilities=[0.8, 0.2])
+        c1b = CategoricalInputNode(scope_var=0, probabilities=[0.3, 0.7])
+        circ1 = SumNode(children=[c1a, c1b], parameters=[0.5, 0.5])
+        c2a = CategoricalInputNode(scope_var=0, probabilities=[0.6, 0.4])
+        c2b = CategoricalInputNode(scope_var=0, probabilities=[0.1, 0.9])
+        circ2 = SumNode(children=[c2a, c2b], parameters=[0.4, 0.6])
         cross = gcw_crossterm(circ1, circ2)
         assert np.isfinite(cross)
         assert cross >= -1e-8
 
     def test_product_coupling(self):
         p1 = ProductNode(
-            id=6,
             children=[
-                CategoricalInputNode(id=7, scope_var=0, probabilities=[0.5, 0.5]),
-                CategoricalInputNode(id=8, scope_var=1, probabilities=[0.5, 0.5]),
+                CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5]),
+                CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5]),
             ],
         )
         p2 = ProductNode(
-            id=9,
             children=[
-                CategoricalInputNode(id=10, scope_var=0, probabilities=[0.25, 0.75]),
-                CategoricalInputNode(id=11, scope_var=1, probabilities=[0.75, 0.25]),
+                CategoricalInputNode(scope_var=0, probabilities=[0.25, 0.75]),
+                CategoricalInputNode(scope_var=1, probabilities=[0.75, 0.25]),
             ],
         )
         cross = gcw_crossterm(p1, p2)
@@ -94,7 +92,7 @@ class TestLeafCrossterm:
         d_q = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64)
         expected = _brute_force_crossterm(p, q, d_p, d_q)
 
-        leaf1 = CategoricalInputNode(id=20, scope_var=0, probabilities=p)
-        leaf2 = CategoricalInputNode(id=21, scope_var=0, probabilities=q)
+        leaf1 = CategoricalInputNode(scope_var=0, probabilities=p)
+        leaf2 = CategoricalInputNode(scope_var=0, probabilities=q)
         cross = gcw_crossterm(leaf1, leaf2)
         assert_allclose(cross, expected, atol=1e-10)

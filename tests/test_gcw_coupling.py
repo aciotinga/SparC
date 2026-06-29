@@ -24,8 +24,7 @@ from numpy.testing import assert_allclose
 
 from sparc import (
     CategoricalInputNode,
-    Circuit,
-    ProductNode,
+        ProductNode,
     SumNode,
     gcw_coupling_circuit,
 )
@@ -56,10 +55,10 @@ def _canonical_sum_sum_pair():
     """The regression fixture from ``test_sparc_extras`` (sum x sum, 1 shared var)."""
     c1a = make_categorical(0, 0, [0.8, 0.2])
     c1b = make_categorical(1, 0, [0.3, 0.7])
-    circ1 = SumNode(id=2, children=[c1a, c1b], parameters=[0.5, 0.5])
+    circ1 = SumNode(children=[c1a, c1b], parameters=[0.5, 0.5])
     c2a = make_categorical(3, 0, [0.6, 0.4])
     c2b = make_categorical(4, 0, [0.1, 0.9])
-    circ2 = SumNode(id=5, children=[c2a, c2b], parameters=[0.4, 0.6])
+    circ2 = SumNode(children=[c2a, c2b], parameters=[0.4, 0.6])
     return circ1, circ2
 
 
@@ -91,9 +90,9 @@ def _nested_sum_of_products(rng: np.random.Generator):
         )
         for i in range(4)
     ]
-    prod_a = ProductNode(id=20, children=[leaves1[0], leaves1[1]])
-    prod_b = ProductNode(id=21, children=[leaves1[2], leaves1[3]])
-    circ1 = SumNode(id=22, children=[prod_a, prod_b], parameters=[0.45, 0.55])
+    prod_a = ProductNode(children=[leaves1[0], leaves1[1]])
+    prod_b = ProductNode(children=[leaves1[2], leaves1[3]])
+    circ1 = SumNode(children=[prod_a, prod_b], parameters=[0.45, 0.55])
 
     leaves2 = [
         make_categorical(
@@ -101,9 +100,9 @@ def _nested_sum_of_products(rng: np.random.Generator):
         )
         for i in range(4)
     ]
-    prod_c = ProductNode(id=40, children=[leaves2[0], leaves2[1]])
-    prod_d = ProductNode(id=41, children=[leaves2[2], leaves2[3]])
-    circ2 = SumNode(id=42, children=[prod_c, prod_d], parameters=[0.3, 0.7])
+    prod_c = ProductNode(children=[leaves2[0], leaves2[1]])
+    prod_d = ProductNode(children=[leaves2[2], leaves2[3]])
+    circ2 = SumNode(children=[prod_c, prod_d], parameters=[0.3, 0.7])
     return circ1, circ2
 
 
@@ -116,17 +115,17 @@ class TestCouplingStructure:
     def test_leaf_coupling_scope_disjoint(self):
         leaf1, leaf2 = _leaf_pair()
         coupling = gcw_coupling_circuit(leaf1, leaf2)
-        assert set(coupling.root.scope_as_list()) == {0, 1}
+        assert set(coupling.scope_as_list()) == {0, 1}
 
     def test_product_coupling_scope_shift(self):
         circ1, circ2 = _product_pair()
         coupling = gcw_coupling_circuit(circ1, circ2)
-        assert set(coupling.root.scope_as_list()) == {0, 1, 2, 3}
+        assert set(coupling.scope_as_list()) == {0, 1, 2, 3}
 
     def test_coupling_is_valid_pc_tree(self):
         circ1, circ2 = _canonical_sum_sum_pair()
         coupling = gcw_coupling_circuit(circ1, circ2)
-        walk_pc_invariants(coupling.root)
+        walk_pc_invariants(coupling)
 
     @pytest.mark.parametrize(
         "builder",
@@ -139,13 +138,13 @@ class TestCouplingStructure:
     )
     def test_coupling_pc_invariants_across_topologies(self, builder):
         c1, c2 = builder()
-        walk_pc_invariants(gcw_coupling_circuit(c1, c2).root)
+        walk_pc_invariants(gcw_coupling_circuit(c1, c2))
 
     def test_coupling_total_mass_is_one(self):
         circ1, circ2 = _canonical_sum_sum_pair()
         coupling = gcw_coupling_circuit(circ1, circ2)
-        scope = sorted(coupling.root.scope_as_list())
-        cards = var_cardinalities(coupling.root)
+        scope = sorted(coupling.scope_as_list())
+        cards = var_cardinalities(coupling)
         total = 0.0
         import itertools
 
@@ -203,8 +202,8 @@ class TestCouplingExactMarginals:
         rng = np.random.default_rng(seed)
         circ1, circ2 = _nested_sum_of_products(rng)
         coupling = gcw_coupling_circuit(circ1, circ2)
-        c1 = Circuit(circ1)
-        c2 = Circuit(circ2)
+        c1 = circ1
+        c2 = circ2
         off = q_var_offset(circ1)
         for var in sorted(circ1.scope_as_list()):
             assert_allclose(
@@ -364,8 +363,8 @@ class TestCouplingCrossBuildConsistency:
         c_a = gcw_coupling_circuit(circ1, circ2)
         pollute_heap_with_couplings(gcw_coupling_circuit, rounds=10, seed=4)
         c_b = gcw_coupling_circuit(circ1, circ2)
-        scope = sorted(c_a.root.scope_as_list())
-        cards = var_cardinalities(c_a.root)
+        scope = sorted(c_a.scope_as_list())
+        cards = var_cardinalities(c_a)
         import itertools
 
         for values in itertools.product(*[range(cards[v]) for v in scope]):
@@ -395,9 +394,9 @@ class TestCouplingTopologies:
         )
         for c1, c2 in ((circ_sum, prod), (prod, circ_sum)):
             coupling = gcw_coupling_circuit(c1, c2)
-            walk_pc_invariants(coupling.root)
-            c1_circ = Circuit(c1)
-            c2_circ = Circuit(c2)
+            walk_pc_invariants(coupling)
+            c1_circ = c1
+            c2_circ = c2
             q_off = q_var_offset(c1)
             for var in sorted(c1.scope_as_list()):
                 assert_allclose(

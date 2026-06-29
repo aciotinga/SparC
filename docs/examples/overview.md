@@ -98,4 +98,4 @@ PYTHONPATH=. python examples/train_mnist.py --epochs 10
 The `examples/example_pcs/` directory contains JSON circuits for datasets
 including adult, plants, bbc, and others. Load them with
 [`load_learned_pc`][sparc.io.learned_pc.load_learned_pc] or
-[`Circuit.load`][sparc.circuit.Circuit.load].
+[`CircuitNode.load`][sparc.circuit.CircuitNode.load].

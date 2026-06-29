@@ -12,7 +12,7 @@ The distribution name on PyPI is **`sparc-pc`**; import as **`sparc`**:
 
 ```python
 import sparc
-from sparc import Circuit
+from sparc import CategoricalInputNode, SumNode
 ```
 
 No C++ compiler is needed when installing from a wheel.
@@ -56,11 +56,11 @@ pip install -e ".[gurobi]"    # optional Gurobi extra (not used by core library)
 ## Verify the install
 
 ```python
-from sparc import Circuit, CategoricalInputNode, SumNode, ProductNode
+from sparc import CategoricalInputNode, SumNode, ProductNode
 
-x = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.7, 0.3])
-root = SumNode(id=1, children=[x], parameters=[1.0])
-Circuit(root).log_likelihood(np.array([0], dtype=np.int32))
+x = CategoricalInputNode(scope_var=0, probabilities=[0.7, 0.3])
+root = SumNode(children=[x], parameters=[1.0])
+root.log_likelihood(np.array([0], dtype=np.int32))
 ```
 
 ## Building documentation locally

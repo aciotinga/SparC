@@ -51,7 +51,7 @@ In a fresh virtual environment:
 
 ```bash
 pip install dist/sparc_pc-*.whl
-python -c "import sparc; from sparc import Circuit; print(sparc.__version__)"
+python -c "import sparc; from sparc import CategoricalInputNode; print(sparc.__version__)"
 ```
 
 Source install (requires a C++17 compiler):

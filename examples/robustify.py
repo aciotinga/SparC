@@ -50,7 +50,7 @@ import numpy as np
 
 
 
-from sparc.circuit import Circuit
+from sparc.nodes import CircuitNode
 
 from sparc.optim import apply_grads, global_grad_norm
 
@@ -218,7 +218,7 @@ def resolve_eval_datasets(dataset_name: str, dataset_k: int) -> tuple[np.ndarray
 
 
 
-def mean_log_likelihood(circuit: Circuit, rows: np.ndarray) -> float:
+def mean_log_likelihood(circuit: CircuitNode, rows: np.ndarray) -> float:
 
     return float(circuit.compile().log_likelihood(rows).mean())
 
@@ -354,12 +354,9 @@ def combine_phi_grads(logexp_grads, cw_grads, lam):
 
 def update_q_phi(
 
-    p_theta: Circuit,
-
-    q_phi: Circuit,
-
-    p_hat: Circuit,
-
+    p_theta: 
+    q_phi: 
+    p_hat: 
     lam: float,
 
     *,
@@ -406,10 +403,8 @@ def update_q_phi(
 
 def update_p_theta(
 
-    p_theta: Circuit,
-
-    q_phi: Circuit,
-
+    p_theta: 
+    q_phi: 
     *,
 
     eta_theta: float,
@@ -434,8 +429,7 @@ def update_p_theta(
 
 def _eval_and_report(
 
-    p_theta: Circuit,
-
+    p_theta: 
     it: int,
 
     *,
@@ -794,9 +788,9 @@ def main():
 
     print(f"loading {path.name} from {path.parent}")
 
-    p_hat = Circuit.load(path)
+    p_hat = CircuitNode.load(path)
 
-    print(f"  nodes in scope: {len(p_hat.root.scope_as_list())}")
+    print(f"  nodes in scope: {len(p_hat.scope_as_list())}")
 
 
 

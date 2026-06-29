@@ -26,39 +26,31 @@ def _as_float_list(values: _ArrayLike) -> List[float]:
 
 
 class _NodeFactory:
-    def __init__(self) -> None:
-        self._next_id = 0
-
-    def _alloc_id(self) -> int:
-        node_id = self._next_id
-        self._next_id += 1
-        return node_id
-
     def categorical(self, scope_var: int, probabilities: _ArrayLike) -> CategoricalInputNode:
         return CategoricalInputNode(
-            self._alloc_id(), int(scope_var), _as_float_list(probabilities)
+            int(scope_var), _as_float_list(probabilities)
         )
 
     def bernoulli(self, scope_var: int, p: float) -> BernoulliInputNode:
-        return BernoulliInputNode(self._alloc_id(), int(scope_var), float(p))
+        return BernoulliInputNode(int(scope_var), float(p))
 
     def indicator(self, scope_var: int, value: int, num_cats: int) -> IndicatorInputNode:
         return IndicatorInputNode(
-            self._alloc_id(), int(scope_var), int(value), int(num_cats)
+            int(scope_var), int(value), int(num_cats)
         )
 
     def literal(self, scope_var: int, value: int) -> LiteralInputNode:
-        return LiteralInputNode(self._alloc_id(), int(scope_var), int(value))
+        return LiteralInputNode(int(scope_var), int(value))
 
     def discrete_logistic(
         self, scope_var: int, mu: float, s: float, num_cats: int
     ) -> DiscreteLogisticInputNode:
         return DiscreteLogisticInputNode(
-            self._alloc_id(), int(scope_var), float(mu), float(s), int(num_cats)
+            int(scope_var), float(mu), float(s), int(num_cats)
         )
 
     def product(self, children: Iterable) -> ProductNode:
-        return ProductNode(self._alloc_id(), list(children))
+        return ProductNode(list(children))
 
     def sum(self, children: Iterable, parameters: _ArrayLike) -> SumNode:
-        return SumNode(self._alloc_id(), list(children), _as_float_list(parameters))
+        return SumNode(list(children), _as_float_list(parameters))

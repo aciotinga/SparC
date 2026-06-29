@@ -10,8 +10,7 @@ from numpy.testing import assert_allclose
 
 from sparc import (
     CategoricalInputNode,
-    Circuit,
-    ProductNode,
+        ProductNode,
     SumNode,
     gcw_coupling_circuit,
     likelihood,
@@ -47,7 +46,7 @@ class TestNormalizationProperties:
             input_distribution="categorical",
             alpha=1.0,
         ).build()
-        walk_pc_invariants(circuit.root)
+        walk_pc_invariants(circuit)
         assert_allclose(exact_total_mass(circuit), 1.0, rtol=0, atol=1e-8)
 
     def test_region_embedding_normalizes(self):
@@ -63,7 +62,7 @@ class TestNormalizationProperties:
             input_distribution="categorical",
             alpha=1.0,
         ).build()
-        walk_pc_invariants(circuit.root)
+        walk_pc_invariants(circuit)
         assert_allclose(exact_total_mass(circuit), 1.0, rtol=0, atol=1e-8)
 
 
@@ -83,7 +82,7 @@ class TestDeterminismProperties:
         assert (a == b).all()
 
     def test_likelihood_independent_of_build_order(self):
-        leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.3, 0.7])
+        leaf = CategoricalInputNode(scope_var=0, probabilities=[0.3, 0.7])
         pollute_heap_with_couplings(gcw_coupling_circuit, rounds=5, seed=2)
         assert likelihood(leaf, assignment_array({0: 1})) == pytest.approx(0.7)
 
@@ -91,10 +90,9 @@ class TestDeterminismProperties:
 class TestIdempotenceProperties:
     def test_double_propagate_scope_unchanged(self):
         root = ProductNode(
-            id=2,
             children=[
-                CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5]),
-                CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5]),
+                CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5]),
+                CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5]),
             ],
         )
         root.propagate_scope()
@@ -103,9 +101,7 @@ class TestIdempotenceProperties:
         assert root.scope_as_list() == scope1
 
     def test_log_likelihood_is_log_of_likelihood(self):
-        circuit = Circuit(
-            make_sum(1, 0, [[0.6, 0.4], [0.2, 0.8]], [0.5, 0.5], id_base=10)
-        )
+        circuit = make_sum(1, 0, [[0.6, 0.4], [0.2, 0.8]], [0.5, 0.5], id_base=10)
         row = assignment_array({0: 0})
         assert circuit.log_likelihood(row) == pytest.approx(
             np.log(circuit.likelihood(row))
@@ -116,7 +112,7 @@ class TestMarginalPreservation:
     def test_mixture_marginal_matches_exact(self):
         probs = [[0.9, 0.1], [0.2, 0.8]]
         weights = [0.35, 0.65]
-        circuit = Circuit(make_sum(10, 0, probs, weights, id_base=100))
+        circuit = make_sum(10, 0, probs, weights, id_base=100)
         assert_allclose(
             exact_marginal(circuit, 0),
             sum_mixture_marginal(probs, weights),

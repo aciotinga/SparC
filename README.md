@@ -55,7 +55,7 @@ The PyPI package name is `sparc-pc`; import as `sparc`:
 
 ```python
 import sparc
-from sparc import Circuit
+from sparc import CategoricalInputNode, SumNode, ProductNode
 ```
 
 ### From source (developers)
@@ -76,14 +76,14 @@ See [Releasing](docs/releasing.md) for maintainer release steps.
 
 ```python
 import numpy as np
-from sparc import CategoricalInputNode, SumNode, ProductNode, Circuit
+from sparc import CategoricalInputNode, SumNode, ProductNode
 
-x0 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.7, 0.3])
-x1 = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
-prod = ProductNode(id=2, children=[x0, x1])
-root = SumNode(id=3, children=[prod], parameters=[1.0])
+x0 = CategoricalInputNode(scope_var=0, probabilities=[0.7, 0.3])
+x1 = CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5])
+prod = ProductNode(children=[x0, x1])
+root = SumNode(children=[prod], parameters=[1.0])
 
-circuit = Circuit(root)
+circuit = root
 point = np.array([0, 1], dtype=np.int32)
 circuit.log_likelihood(point)
 circuit.sample(5, seed=0)  # ndarray (5, max_var+1)
@@ -118,7 +118,7 @@ and extension points.
 
 ```
 sparc/
-  circuit.py       # high-level Circuit wrapper
+  node_clone.py    # deep-copy helpers for circuit DAGs
   nodes.pyx        # CircuitNode / Sum / Product / leaf nodes (+ vtable)
   eval.pyx         # likelihood / sampling + CompiledCircuit
   grad.pyx         # GradBundle + mean_log_likelihood_and_grad

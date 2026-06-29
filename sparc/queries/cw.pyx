@@ -39,17 +39,18 @@ from sparc.solvers.transport cimport transport_with_duals
 
 
 cdef CircuitNode _unwrap(object circuit):
-    from sparc.circuit import Circuit
+    cdef CircuitNode node
     if isinstance(circuit, CompiledCircuit):
         raise TypeError(
-            "expected a Circuit or CircuitNode for object-graph queries; "
+            "expected a CircuitNode for object-graph queries; "
             "use CompiledCircuit methods for the fast path"
         )
-    if isinstance(circuit, Circuit):
-        return <CircuitNode>(<object>circuit).root
-    if isinstance(circuit, CircuitNode):
-        return <CircuitNode>circuit
-    raise TypeError("expected a Circuit or CircuitNode")
+    if not isinstance(circuit, CircuitNode):
+        raise TypeError("expected a CircuitNode")
+    node = <CircuitNode>circuit
+    if node.scope.size() == 0:
+        node.propagate_scope()
+    return node
 
 
 cdef CircuitNode _compiled_root(CompiledCircuit g):
@@ -57,13 +58,12 @@ cdef CircuitNode _compiled_root(CompiledCircuit g):
 
 
 cdef void _check_pair_types(object c1, object c2) except *:
-    from sparc.circuit import Circuit
     cdef bint cc1 = isinstance(c1, CompiledCircuit)
     cdef bint cc2 = isinstance(c2, CompiledCircuit)
     if cc1 != cc2:
         raise TypeError(
             "pairwise queries require both operands to be the same kind: "
-            "either both Circuit/CircuitNode or both CompiledCircuit"
+            "either both CircuitNode or both CompiledCircuit"
         )
 
 

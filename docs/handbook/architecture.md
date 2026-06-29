@@ -6,7 +6,7 @@ inference and differentiable queries.
 ```mermaid
 flowchart TB
     subgraph userLayer [User Layer]
-        Circuit[Circuit wrapper]
+        RootNode[CircuitNode root]
         Compiled[CompiledCircuit]
         Builders[builders/]
         Structures[structures/]
@@ -27,21 +27,21 @@ flowchart TB
         QueriesFlat[CW GCW expectation ESD]
     end
 
-    Builders --> Circuit
-    Structures --> Circuit
-    Circuit --> objectPath
-    Circuit -->|compile once| Compiled
+    Builders --> RootNode
+    Structures --> RootNode
+    RootNode --> objectPath
+    RootNode -->|compile once| Compiled
     Compiled --> flatPath
-    Optim --> Circuit
+    Optim --> RootNode
 ```
 
 ## Package layout
 
 | Path | Role |
 |------|------|
-| `sparc/circuit.py` | High-level `Circuit` wrapper |
+| `sparc/nodes.pyx` | `CircuitNode` types, inference/query API, leaf vtable |
+| `sparc/node_clone.py` | Deep-copy helpers |
 | `sparc/_graph.pyx` | `CompiledCircuit` flattened layout |
-| `sparc/nodes.pyx` | Node types and leaf vtable |
 | `sparc/eval.pyx` | Object-graph likelihood / sampling |
 | `sparc/grad.pyx` | `GradBundle`, object + compiled gradients |
 | `sparc/metrics.pyx` | Pluggable ground metrics |
@@ -54,7 +54,7 @@ flowchart TB
 
 ## Data flow
 
-1. User builds or loads a circuit (`Circuit(root)`).
+1. User builds or loads a circuit (`root`).
 2. Object-graph queries walk live nodes with memoization.
 3. `circuit.compile()` flattens the DAG into `CompiledCircuit` once.
 4. Compiled queries use `nogil` numeric cores over CSR arrays; call `refresh_parameters()` after weight updates.

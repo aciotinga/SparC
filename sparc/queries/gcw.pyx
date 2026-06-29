@@ -55,17 +55,18 @@ cdef struct LeafInfo:
 
 
 cdef CircuitNode _unwrap(object circuit):
-    from sparc.circuit import Circuit
+    cdef CircuitNode node
     if isinstance(circuit, CompiledCircuit):
         raise TypeError(
-            "expected a Circuit or CircuitNode for object-graph queries; "
+            "expected a CircuitNode for object-graph queries; "
             "use CompiledCircuit methods for the fast path"
         )
-    if isinstance(circuit, Circuit):
-        return <CircuitNode>(<object>circuit).root
-    if isinstance(circuit, CircuitNode):
-        return <CircuitNode>circuit
-    raise TypeError("expected a Circuit or CircuitNode")
+    if not isinstance(circuit, CircuitNode):
+        raise TypeError("expected a CircuitNode")
+    node = <CircuitNode>circuit
+    if node.scope.size() == 0:
+        node.propagate_scope()
+    return node
 
 
 cdef CircuitNode _compiled_root(CompiledCircuit g):
@@ -78,7 +79,7 @@ cdef void _check_pair_types(object c1, object c2) except *:
     if cc1 != cc2:
         raise TypeError(
             "pairwise queries require both operands to be the same kind: "
-            "either both Circuit/CircuitNode or both CompiledCircuit"
+            "either both CircuitNode or both CompiledCircuit"
         )
 
 
@@ -1547,7 +1548,7 @@ cdef class GCWContext(CoupleContext):
     cdef object _det_cat(self, int var, size_t outcome, size_t n):
         cdef list probs = [0.0] * <Py_ssize_t>n
         probs[<Py_ssize_t>outcome] = 1.0
-        return CategoricalInputNode(self._alloc(), var, probs)
+        return CategoricalInputNode(var, probs, id=self._alloc())
 
     cdef int _var_of(self, FiniteDiscreteInputNode leaf, int side) except *:
         return leaf.scope_var_c() + (self._mat_offset if side == 1 else 0)
@@ -1576,18 +1577,19 @@ cdef class GCWContext(CoupleContext):
             leaf = <FiniteDiscreteInputNode>node
             nc = leaf.support_size()
             probs = [leaf.pmf_at(k) for k in range(nc)]
-            out = CategoricalInputNode(self._alloc(), self._var_of(leaf, side), probs)
+            out = CategoricalInputNode(self._var_of(leaf, side), probs, id=self._alloc())
         elif node.node_kind == NODE_SUM:
             s = <SumNode>node
             nc = s.num_children()
             children = [self._embed(s.child_at(i), side) for i in range(nc)]
-            out = SumNode(self._alloc(), children,
-                          [s.parameter_at(i) for i in range(nc)])
+            out = SumNode(children,
+                          [s.parameter_at(i) for i in range(nc)],
+                          id=self._alloc())
         elif node.node_kind == NODE_PRODUCT:
             prod = <ProductNode>node
             nc = prod.num_children()
             children = [self._embed(prod.child_at(i), side) for i in range(nc)]
-            out = ProductNode(self._alloc(), children)
+            out = ProductNode(children, id=self._alloc())
         else:
             raise TypeError(f"cannot embed node type {type(node).__name__}")
         self._mat_embed_memo[key] = out
@@ -1657,14 +1659,14 @@ cdef class GCWContext(CoupleContext):
         num = rows.size()
         for a in range(num):
             if vals[a] > 1e-15:
-                children.append(ProductNode(self._alloc(), [
+                children.append(ProductNode([
                     self._det_cat(p_var, <size_t>rows[a], n),
                     self._det_cat(q_var, <size_t>cols[a], m),
-                ]))
+                ], id=self._alloc()))
                 weights.append(vals[a])
                 total += vals[a]
         weights = [w / total for w in weights]
-        return SumNode(self._alloc(), children, weights)
+        return SumNode(children, weights, id=self._alloc())
 
     cdef object _mat_sum_sum(self, SumNode P, SumNode Q, int sP, int sQ):
         cdef size_t n = P.num_children()
@@ -1705,7 +1707,7 @@ cdef class GCWContext(CoupleContext):
                     weights.append(w)
                     total += w
         weights = [x / total for x in weights]
-        return SumNode(self._alloc(), children, weights)
+        return SumNode(children, weights, id=self._alloc())
 
     cdef object _mat_prod_prod(self, ProductNode P, ProductNode Q, int sP, int sQ):
         cdef size_t n = P.num_children()
@@ -1738,7 +1740,7 @@ cdef class GCWContext(CoupleContext):
         for i in range(n):
             if not matched_p[i]:
                 children.append(self._embed(P.child_at(i), sP))
-        return ProductNode(self._alloc(), children)
+        return ProductNode(children, id=self._alloc())
 
     cdef object _mat_sum_other(self, SumNode P, CircuitNode Q, int sP, int sQ):
         cdef size_t nc = P.num_children()
@@ -1748,7 +1750,7 @@ cdef class GCWContext(CoupleContext):
         for i in range(nc):
             children.append(self._materialize(P.child_at(i), Q, sP, sQ))
             weights.append(P.parameter_at(i))
-        return SumNode(self._alloc(), children, weights)
+        return SumNode(children, weights, id=self._alloc())
 
     cdef object _mat_prod_other(self, ProductNode P, CircuitNode Q, int sP, int sQ):
         cdef size_t nc = P.num_children()
@@ -1767,7 +1769,7 @@ cdef class GCWContext(CoupleContext):
         for i in range(nc):
             if i != best_idx:
                 children.append(self._embed(P.child_at(i), sP))
-        return ProductNode(self._alloc(), children)
+        return ProductNode(children, id=self._alloc())
 
     cdef object _mat_max_sum_prod(self, SumNode P_sum, ProductNode Q_prod, int sP_sum, int sQ_prod):
         cdef size_t nc_sum = P_sum.num_children()
@@ -1869,7 +1871,7 @@ cpdef object gcw_coupling_circuit(
 ):
     """Materialize the GCW coupling as a probabilistic circuit.
 
-    Returns a :class:`~sparc.circuit.Circuit` over ``vars(circuit1)`` together
+    Returns a root :class:`~sparc.nodes.CircuitNode` over ``vars(circuit1)`` together
     with ``vars(circuit2)`` shifted by ``max(vars(circuit1)) + 1`` (so the two
     variable namespaces are disjoint). Ancestral sampling from the returned
     circuit draws a joint ``(x, y)`` pair distributed according to the coupling
@@ -1880,7 +1882,6 @@ cpdef object gcw_coupling_circuit(
     the mixed sum/product argmax becomes a product of the winning couple with
     the losing children's marginals.
     """
-    from sparc.circuit import Circuit
     cdef CircuitNode r1 = _unwrap(circuit1)
     cdef CircuitNode r2 = _unwrap(circuit2)
     cdef GCWContext ctx = GCWContext()
@@ -1888,7 +1889,7 @@ cpdef object gcw_coupling_circuit(
     ctx.metric1 = metric2 if metric2 is not None else PNormMetric(metric_p, scale_factor_2)
     cdef CircuitNode root = <CircuitNode>ctx.materialize(r1, r2)
     root.propagate_scope()
-    return Circuit(root)
+    return root
 
 
 cpdef tuple gcw_crossterm_and_grad(

@@ -162,9 +162,7 @@ cdef double _run_query_evidence(CircuitNode root, Evidence evidence, bint log_sp
     ctx.evidence = evidence
     ctx.log_space = log_space
     if root.scope.size() == 0:
-        raise ValueError(
-            "root scope is empty; call propagate_scope() on the circuit first"
-        )
+        root.propagate_scope()
     return _eval(root, ctx)
 
 
@@ -174,6 +172,8 @@ cdef object _likelihood_impl(
     cdef cnp.ndarray arr
     cdef bint allow_missing
     arr, allow_missing = _coerce_likelihood_data_with_missing(data, True)
+    if root.scope.size() == 0:
+        root.propagate_scope()
     cdef int max_var = _max_var_from_scope(root.scope)
     cdef Py_ssize_t n_rows
     cdef Py_ssize_t r
@@ -249,9 +249,7 @@ cdef void _sample_node(CircuitNode node, RandomState rng, int* out) except *:
 cpdef cnp.ndarray sample(CircuitNode root, Py_ssize_t n_samples, object seed=None):
     """Draw ancestral samples as a 2-D integer array."""
     if root.scope.size() == 0:
-        raise ValueError(
-            "root scope is empty; call propagate_scope() on the circuit first"
-        )
+        root.propagate_scope()
     if n_samples < 0:
         raise ValueError("n_samples must be non-negative")
     cdef unsigned long long rng_seed

@@ -38,17 +38,18 @@ from sparc.queries._engine cimport (
 
 
 cdef CircuitNode _unwrap(object circuit):
-    from sparc.circuit import Circuit
+    cdef CircuitNode node
     if isinstance(circuit, CompiledCircuit):
         raise TypeError(
-            "expected a Circuit or CircuitNode for object-graph queries; "
+            "expected a CircuitNode for object-graph queries; "
             "use CompiledCircuit methods for the fast path"
         )
-    if isinstance(circuit, Circuit):
-        return <CircuitNode>(<object>circuit).root
-    if isinstance(circuit, CircuitNode):
-        return <CircuitNode>circuit
-    raise TypeError("expected a Circuit or CircuitNode")
+    if not isinstance(circuit, CircuitNode):
+        raise TypeError("expected a CircuitNode")
+    node = <CircuitNode>circuit
+    if node.scope.size() == 0:
+        node.propagate_scope()
+    return node
 
 
 cdef CircuitNode _compiled_root(CompiledCircuit g):

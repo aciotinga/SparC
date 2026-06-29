@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Union
 
-from sparc.circuit import Circuit
+from sparc.nodes import CircuitNode
 
 from sparc.io.serializer import CircuitSerializer
 
@@ -16,7 +16,7 @@ def load_learned_pc(
     dataset: str,
     block_size: int,
     seed: int,
-) -> Circuit:
+) -> CircuitNode:
     """Load a pre-trained circuit from the standard directory layout.
 
     Files are expected at::
@@ -32,7 +32,7 @@ def load_learned_pc(
         seed: Random seed encoded in the filename.
 
     Returns:
-        A :class:`~sparc.circuit.Circuit` loaded from the matching JSON file.
+        A :class:`~sparc.nodes.CircuitNode` loaded from the matching JSON file.
 
     Raises:
         FileNotFoundError: If the expected path does not exist.
@@ -44,4 +44,4 @@ def load_learned_pc(
         / str(block_size)
         / f"{structure}_{dataset}_blocksize{block_size}_seed{seed}.json"
     )
-    return Circuit(CircuitSerializer.load(path))
+    return CircuitSerializer.load(path)

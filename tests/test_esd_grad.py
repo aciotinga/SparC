@@ -43,24 +43,24 @@ def _project_to_simplex_tangent(g):
 
 class TestForwardValueMatch:
     def test_leaf_value_match(self):
-        leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.3, 0.7])
+        leaf = CategoricalInputNode(scope_var=0, probabilities=[0.3, 0.7])
         v_ref = expected_squared_distance(leaf)
         v_grad, grads = expected_squared_distance_and_grad(leaf)
         assert_allclose(v_grad, v_ref, rtol=0, atol=1e-12)
         assert_allclose(grads.value, v_ref, rtol=0, atol=1e-12)
 
     def test_sum_value_match(self):
-        c1 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.8, 0.15, 0.05])
-        c2 = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.2, 0.3, 0.5])
-        circ = SumNode(id=2, children=[c1, c2], parameters=[0.35, 0.65])
+        c1 = CategoricalInputNode(scope_var=0, probabilities=[0.8, 0.15, 0.05])
+        c2 = CategoricalInputNode(scope_var=0, probabilities=[0.2, 0.3, 0.5])
+        circ = SumNode(children=[c1, c2], parameters=[0.35, 0.65])
         v_ref = expected_squared_distance(circ)
         v_grad, _ = expected_squared_distance_and_grad(circ)
         assert_allclose(v_grad, v_ref, rtol=0, atol=1e-12)
 
     def test_product_value_match(self):
-        c1 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.4, 0.6])
-        c2 = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.7, 0.3])
-        circ = ProductNode(id=2, children=[c1, c2])
+        c1 = CategoricalInputNode(scope_var=0, probabilities=[0.4, 0.6])
+        c2 = CategoricalInputNode(scope_var=1, probabilities=[0.7, 0.3])
+        circ = ProductNode(children=[c1, c2])
         v_ref = expected_squared_distance(circ)
         v_grad, _ = expected_squared_distance_and_grad(circ)
         assert_allclose(v_grad, v_ref, rtol=0, atol=1e-12)
@@ -73,11 +73,11 @@ class TestLeafGradients:
 
         def f_value(probs):
             leaf = CategoricalInputNode(
-                id=0, scope_var=0, probabilities=list(probs)
+                scope_var=0, probabilities=list(probs)
             )
             return expected_squared_distance(leaf)
 
-        leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=list(p_init))
+        leaf = CategoricalInputNode(scope_var=0, probabilities=list(p_init))
         _, grads = expected_squared_distance_and_grad(leaf)
         assert 0 in grads.cat_grads
         g = _project_to_simplex_tangent(grads.cat_grads[0])
@@ -93,15 +93,15 @@ class TestSumGradients:
         theta_init = np.array([0.42, 0.58])
 
         def f_value(theta):
-            c1 = CategoricalInputNode(id=0, scope_var=0, probabilities=list(p1))
-            c2 = CategoricalInputNode(id=1, scope_var=0, probabilities=list(p2))
+            c1 = CategoricalInputNode(scope_var=0, probabilities=list(p1))
+            c2 = CategoricalInputNode(scope_var=0, probabilities=list(p2))
             return expected_squared_distance(
-                SumNode(id=2, children=[c1, c2], parameters=list(theta))
+                SumNode(children=[c1, c2], parameters=list(theta))
             )
 
-        c1 = CategoricalInputNode(id=0, scope_var=0, probabilities=list(p1))
-        c2 = CategoricalInputNode(id=1, scope_var=0, probabilities=list(p2))
-        circ = SumNode(id=2, children=[c1, c2], parameters=list(theta_init))
+        c1 = CategoricalInputNode(scope_var=0, probabilities=list(p1))
+        c2 = CategoricalInputNode(scope_var=0, probabilities=list(p2))
+        circ = SumNode(children=[c1, c2], parameters=list(theta_init))
         _, grads = expected_squared_distance_and_grad(circ)
         assert 2 in grads.sum_grads
         g = _project_to_simplex_tangent(grads.sum_grads[2])
@@ -116,13 +116,13 @@ class TestProductGradients:
         other_q = list(rng.dirichlet([1.0, 1.0]))
 
         def f_value(probs):
-            c1 = CategoricalInputNode(id=0, scope_var=0, probabilities=list(probs))
-            c2 = CategoricalInputNode(id=1, scope_var=1, probabilities=other_q)
-            return expected_squared_distance(ProductNode(id=2, children=[c1, c2]))
+            c1 = CategoricalInputNode(scope_var=0, probabilities=list(probs))
+            c2 = CategoricalInputNode(scope_var=1, probabilities=other_q)
+            return expected_squared_distance(ProductNode(children=[c1, c2]))
 
-        c1 = CategoricalInputNode(id=0, scope_var=0, probabilities=list(q_init))
-        c2 = CategoricalInputNode(id=1, scope_var=1, probabilities=other_q)
-        circ = ProductNode(id=2, children=[c1, c2])
+        c1 = CategoricalInputNode(scope_var=0, probabilities=list(q_init))
+        c2 = CategoricalInputNode(scope_var=1, probabilities=other_q)
+        circ = ProductNode(children=[c1, c2])
         _, grads = expected_squared_distance_and_grad(circ)
         assert 0 in grads.cat_grads
         g = _project_to_simplex_tangent(grads.cat_grads[0])
@@ -138,7 +138,7 @@ class TestCombinedDescentSmoke:
         n_cats = 3
         p_fixed = rng.dirichlet([1.0] * n_cats)
         leaf_ref = CategoricalInputNode(
-            id=0, scope_var=0, probabilities=list(p_fixed)
+            scope_var=0, probabilities=list(p_fixed)
         )
         esd_c1 = expected_squared_distance(leaf_ref)
 
@@ -147,14 +147,14 @@ class TestCombinedDescentSmoke:
         history = []
         for _ in range(8):
             leaf_learn = CategoricalInputNode(
-                id=1, scope_var=0, probabilities=list(q)
+                scope_var=0, probabilities=list(q)
             )
             cross, cross_grads = gcw_crossterm_and_grad(leaf_ref, leaf_learn)
             esd2, esd_grads = expected_squared_distance_and_grad(leaf_learn)
             history.append(esd_c1 + esd2 - 2.0 * cross)
 
-            g_esd = _project_to_simplex_tangent(esd_grads.cat_grads[1])
-            g_cross = _project_to_simplex_tangent(cross_grads.cat_grads[1])
+            g_esd = _project_to_simplex_tangent(esd_grads.cat_grads[int(leaf_learn.id)])
+            g_cross = _project_to_simplex_tangent(cross_grads.cat_grads[int(leaf_learn.id)])
             g_total = g_esd - 2.0 * g_cross
             q = q - lr * g_total
             q = np.clip(q, 1e-6, None)

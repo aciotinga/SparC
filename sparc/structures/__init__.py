@@ -1,7 +1,7 @@
 """Built-in probabilistic-circuit structures.
 
 This subpackage provides ready-made circuit constructors that return a
-:class:`sparc.circuit.Circuit`:
+:class:`~sparc.nodes.CircuitNode` root:
 
 - :func:`PD` / :func:`PDHCLT` -- recursive grid decompositions.
 - :func:`HCLT` -- hidden tree-structured circuits derived from data.

@@ -10,7 +10,7 @@ import pytest
 
 from sparc import (
     CategoricalInputNode,
-    Circuit,
+    CircuitNode,
     CircuitSerializer,
     ProductNode,
     SumNode,
@@ -35,13 +35,13 @@ def _assert_tree_equal(a, b) -> None:
 
 
 def _build_tree():
-    l0a = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.8, 0.2])
-    l1a = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
-    l0b = CategoricalInputNode(id=2, scope_var=0, probabilities=[0.3, 0.7])
-    l1b = CategoricalInputNode(id=3, scope_var=1, probabilities=[0.25, 0.75])
-    p0 = ProductNode(id=4, children=[l0a, l1a])
-    p1 = ProductNode(id=5, children=[l0b, l1b])
-    root = SumNode(id=6, children=[p0, p1], parameters=[0.6, 0.4])
+    l0a = CategoricalInputNode(scope_var=0, probabilities=[0.8, 0.2])
+    l1a = CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5])
+    l0b = CategoricalInputNode(scope_var=0, probabilities=[0.3, 0.7])
+    l1b = CategoricalInputNode(scope_var=1, probabilities=[0.25, 0.75])
+    p0 = ProductNode(children=[l0a, l1a])
+    p1 = ProductNode(children=[l0b, l1b])
+    root = SumNode(children=[p0, p1], parameters=[0.6, 0.4])
     root.propagate_scope()
     return root
 
@@ -53,8 +53,8 @@ def test_roundtrip_tree():
 
 
 def test_roundtrip_shared_child_twice():
-    leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.2, 0.3, 0.5])
-    root = SumNode(id=1, children=[leaf, leaf], parameters=[0.4, 0.6])
+    leaf = CategoricalInputNode(scope_var=0, probabilities=[0.2, 0.3, 0.5])
+    root = SumNode(children=[leaf, leaf], parameters=[0.4, 0.6])
     root.propagate_scope()
 
     out = CircuitSerializer.loads(CircuitSerializer.dumps(root))
@@ -63,12 +63,12 @@ def test_roundtrip_shared_child_twice():
 
 
 def test_roundtrip_dag_two_parents():
-    shared = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-    l1a = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.3, 0.7])
-    l1b = CategoricalInputNode(id=2, scope_var=1, probabilities=[0.6, 0.4])
-    p1 = ProductNode(id=3, children=[shared, l1a])
-    p2 = ProductNode(id=4, children=[shared, l1b])
-    root = SumNode(id=5, children=[p1, p2], parameters=[0.5, 0.5])
+    shared = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+    l1a = CategoricalInputNode(scope_var=1, probabilities=[0.3, 0.7])
+    l1b = CategoricalInputNode(scope_var=1, probabilities=[0.6, 0.4])
+    p1 = ProductNode(children=[shared, l1a])
+    p2 = ProductNode(children=[shared, l1b])
+    root = SumNode(children=[p1, p2], parameters=[0.5, 0.5])
     root.propagate_scope()
 
     out = CircuitSerializer.loads(CircuitSerializer.dumps(root))
@@ -85,12 +85,12 @@ def test_save_load_file():
 
 
 def test_circuit_save_load_wrapper():
-    circuit = Circuit(_build_tree())
+    circuit = _build_tree()
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / "c.json"
         circuit.save(path, indent=None)
-        restored = Circuit.load(path)
-    _assert_tree_equal(circuit.root, restored.root)
+        restored = CircuitNode.load(path)
+    _assert_tree_equal(circuit, restored)
 
 
 def test_gaussian_rejected_on_load():

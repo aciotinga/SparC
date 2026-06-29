@@ -18,7 +18,7 @@ from typing import Callable, List, Optional, Sequence, Tuple, Union
 import numpy as np
 
 from sparc.builders._factory import _NodeFactory
-from sparc.circuit import Circuit
+from sparc.nodes import CircuitNode
 from sparc.structures._blocks import (
     Block,
     dense_product_block,
@@ -101,7 +101,7 @@ def _PD(
     dist: InputDistribution,
     concentration: float,
     leaf_builder: Optional[LeafBuilder],
-) -> Circuit:
+) -> CircuitNode:
     if structure_type not in _STRUCTURE_TYPES:
         raise ValueError(f"structure_type must be one of {_STRUCTURE_TYPES}")
     if num_latents < 1:
@@ -174,7 +174,7 @@ def PD(
     num_cats: int = 256,
     sum_concentration: float = 1.0,
     seed: Optional[int] = None,
-) -> Circuit:
+) -> CircuitNode:
     """Build a recursive grid-decomposition circuit over a hypercube of variables.
 
     Parameters
@@ -239,7 +239,7 @@ def PDHCLT(
     num_bins: int = 32,
     sum_concentration: float = 1.0,
     seed: Optional[int] = None,
-) -> Circuit:
+) -> CircuitNode:
     """Grid-decomposition circuit whose leaf regions are hidden tree sub-circuits.
 
     Identical grid structure to :func:`PD`, but each leaf hypercube is built as a

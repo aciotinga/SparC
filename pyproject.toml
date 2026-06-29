@@ -73,7 +73,7 @@ include = ["sparc*"]
 [tool.cibuildwheel]
 build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_* cp*t-*"
-test-command = "python -c \"import sparc; from sparc import Circuit; print(sparc.__version__)\""
+test-command = "python -c \"import sparc; from sparc import CategoricalInputNode, SumNode; print(sparc.__version__)\""
 
 [tool.cibuildwheel.macos]
 archs = ["x86_64", "arm64"]
@@ -88,7 +88,7 @@ markers = [
     "metrics: ground metric and metric-driven query behavior",
     "eval: likelihood, sampling, and compiled batched evaluation",
     "optim: simplex_step, apply_grads, MLETrainer",
-    "circuit: Circuit wrapper (clone, save/load, normalization)",
+    "node: CircuitNode API (clone, save/load, normalization)",
     "queries: CW / GCW / exp / log_exp query behavior",
     "integration: cross-module leaf-type integration tests",
     "property: cross-cutting invariants (normalization, determinism)",

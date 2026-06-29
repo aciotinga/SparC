@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sparc.circuit import Circuit
+from sparc.nodes import CircuitNode
 from sparc.optim import apply_grads, global_grad_norm
 from sparc.queries import (
     cw_distance,
@@ -112,7 +112,7 @@ def resolve_eval_datasets(dataset_name: str, dataset_k: int) -> tuple[np.ndarray
     return load_csv_data(original_path), load_csv_data(adversarial_path)
 
 
-def mean_log_likelihood(circuit: Circuit, rows: np.ndarray) -> float:
+def mean_log_likelihood(circuit: CircuitNode, rows: np.ndarray) -> float:
     return float(circuit.compile().log_likelihood(rows).mean())
 
 
@@ -180,8 +180,7 @@ def combine_phi_grads(logexp_grads, cw_grads, lam):
 
 
 def _eval_and_report(
-    p_theta: Circuit,
-    it: int,
+    p_theta:     it: int,
     *,
     original_data: np.ndarray,
     adversarial_data: np.ndarray,
@@ -247,10 +246,7 @@ def ogda_scalar(curr: float, prev: float | None, *, use_ogda: bool) -> float:
 
 
 def compute_player_grads(
-    p_theta: Circuit,
-    q_phi: Circuit,
-    p_hat: Circuit,
-    lam: float,
+    p_theta:     q_phi:     p_hat:     lam: float,
     *,
     k: float,
     cw_kw: dict,
@@ -287,10 +283,7 @@ def update_lambda(lam: float, violation: float, *, eta_lambda: float) -> float:
 
 
 def ogda_step(
-    p_theta: Circuit,
-    q_phi: Circuit,
-    p_hat: Circuit,
-    lam: float,
+    p_theta:     q_phi:     p_hat:     lam: float,
     state: OgdaState,
     *,
     k: float,
@@ -528,8 +521,8 @@ def main():
 
     path = resolve_circuit_path(args.circuit)
     print(f"loading {path.name} from {path.parent}")
-    p_hat = Circuit.load(path)
-    print(f"  nodes in scope: {len(p_hat.root.scope_as_list())}")
+    p_hat = CircuitNode.load(path)
+    print(f"  nodes in scope: {len(p_hat.scope_as_list())}")
 
     original_data = adversarial_data = None
     plotter = None

@@ -11,8 +11,7 @@ from numpy.testing import assert_allclose
 
 from sparc import (
     CategoricalInputNode,
-    Circuit,
-    ProductNode,
+        ProductNode,
     SumNode,
     cw_distance,
     exp_query,
@@ -58,7 +57,7 @@ class TestBatchedVsDict:
             sum_concentration=1.0, sum_reuse_probability=0.0,
             prod_reuse_probability=0.0, input_distribution="categorical", alpha=1.0,
         ).build()
-        nvars = len(circuit.root.scope_as_list())
+        nvars = len(circuit.scope_as_list())
         data = np.random.randint(0, 4, size=(32, nvars)).astype(np.int32)
 
         batched = circuit.compile().log_likelihood(data)
@@ -68,15 +67,15 @@ class TestBatchedVsDict:
 
 class TestClone:
     def test_clone_is_independent(self):
-        leaf_a = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-        leaf_b = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.2, 0.8])
-        root = SumNode(id=2, children=[leaf_a, leaf_b], parameters=[0.6, 0.4])
-        circuit = Circuit(root)
+        leaf_a = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        leaf_b = CategoricalInputNode(scope_var=0, probabilities=[0.2, 0.8])
+        root = SumNode(children=[leaf_a, leaf_b], parameters=[0.6, 0.4])
+        circuit = root
         clone = circuit.clone()
 
         before = circuit.likelihood(assignment_array({0: 0}))
         # mutate the clone's sum parameters
-        clone.root.set_parameters_list([0.1, 0.9])
+        clone.set_parameters_list([0.1, 0.9])
         after = circuit.likelihood(assignment_array({0: 0}))
         assert before == after  # original untouched
         assert clone.likelihood(assignment_array({0: 0})) != after
@@ -89,7 +88,7 @@ class TestClone:
             sum_concentration=1.0, sum_reuse_probability=0.3,
             prod_reuse_probability=0.3, input_distribution="categorical", alpha=1.0,
         ).build()
-        width = max(circuit.root.scope_as_list()) + 1
+        width = max(circuit.scope_as_list()) + 1
         asg = np.zeros(width, dtype=np.int32)
         assert_allclose(circuit.clone().log_likelihood(asg),
                         circuit.log_likelihood(asg), rtol=0, atol=1e-12)
@@ -147,12 +146,12 @@ class TestGCWCouplingCircuit:
     def test_leaf_coupling_marginals(self):
         p = [0.3, 0.7]
         q = [0.55, 0.45]
-        leaf1 = CategoricalInputNode(id=0, scope_var=0, probabilities=p)
-        leaf2 = CategoricalInputNode(id=1, scope_var=0, probabilities=q)
+        leaf1 = CategoricalInputNode(scope_var=0, probabilities=p)
+        leaf2 = CategoricalInputNode(scope_var=0, probabilities=q)
         coupling = gcw_coupling_circuit(leaf1, leaf2)
 
         # disjoint variable namespaces: P keeps var 0, Q is shifted to var 1
-        assert set(coupling.root.scope_as_list()) == {0, 1}
+        assert set(coupling.scope_as_list()) == {0, 1}
 
         draws = coupling.sample(40000, seed=0)
         mp = self._empirical_marginal(draws, 0, 2)
@@ -161,12 +160,12 @@ class TestGCWCouplingCircuit:
         assert_allclose(mq, q, atol=0.02)
 
     def test_sum_coupling_is_valid_pc_and_marginals(self):
-        c1a = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.8, 0.2])
-        c1b = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.3, 0.7])
-        circ1 = SumNode(id=2, children=[c1a, c1b], parameters=[0.5, 0.5])
-        c2a = CategoricalInputNode(id=3, scope_var=0, probabilities=[0.6, 0.4])
-        c2b = CategoricalInputNode(id=4, scope_var=0, probabilities=[0.1, 0.9])
-        circ2 = SumNode(id=5, children=[c2a, c2b], parameters=[0.4, 0.6])
+        c1a = CategoricalInputNode(scope_var=0, probabilities=[0.8, 0.2])
+        c1b = CategoricalInputNode(scope_var=0, probabilities=[0.3, 0.7])
+        circ1 = SumNode(children=[c1a, c1b], parameters=[0.5, 0.5])
+        c2a = CategoricalInputNode(scope_var=0, probabilities=[0.6, 0.4])
+        c2b = CategoricalInputNode(scope_var=0, probabilities=[0.1, 0.9])
+        circ2 = SumNode(children=[c2a, c2b], parameters=[0.4, 0.6])
 
         coupling = gcw_coupling_circuit(circ1, circ2)
         # P marginal over var 0 = 0.5*[0.8,0.2] + 0.5*[0.3,0.7]
@@ -180,22 +179,20 @@ class TestGCWCouplingCircuit:
 
     def test_product_coupling_disjoint_vars(self):
         circ1 = ProductNode(
-            id=2,
             children=[
-                CategoricalInputNode(id=0, scope_var=0, probabilities=[0.4, 0.6]),
-                CategoricalInputNode(id=1, scope_var=1, probabilities=[0.7, 0.3]),
+                CategoricalInputNode(scope_var=0, probabilities=[0.4, 0.6]),
+                CategoricalInputNode(scope_var=1, probabilities=[0.7, 0.3]),
             ],
         )
         circ2 = ProductNode(
-            id=5,
             children=[
-                CategoricalInputNode(id=3, scope_var=0, probabilities=[0.2, 0.8]),
-                CategoricalInputNode(id=4, scope_var=1, probabilities=[0.55, 0.45]),
+                CategoricalInputNode(scope_var=0, probabilities=[0.2, 0.8]),
+                CategoricalInputNode(scope_var=1, probabilities=[0.55, 0.45]),
             ],
         )
         coupling = gcw_coupling_circuit(circ1, circ2)
         # circ1 has vars {0,1}; circ2 shifted by 2 -> {2,3}
-        assert set(coupling.root.scope_as_list()) == {0, 1, 2, 3}
+        assert set(coupling.scope_as_list()) == {0, 1, 2, 3}
         draws = coupling.sample(2000, seed=2)
         for r in range(50):
             row = draws[r]

@@ -5,10 +5,10 @@ Circuits are saved as UTF-8 JSON in the **`gcw-circuit-v1`** format.
 ## Save and load
 
 ```python
-from sparc import Circuit
+from sparc import CircuitNode
 
-circuit.save("model.json")
-loaded = Circuit.load("model.json")
+root.save("model.json")
+loaded = CircuitNode.load("model.json")
 ```
 
 Lower-level access via [`CircuitSerializer`][sparc.io.serializer.CircuitSerializer]:
@@ -16,7 +16,7 @@ Lower-level access via [`CircuitSerializer`][sparc.io.serializer.CircuitSerializ
 ```python
 from sparc.io import CircuitSerializer
 
-json_text = CircuitSerializer.dumps(circuit.root)
+json_text = CircuitSerializer.dumps(root)
 root = CircuitSerializer.load("model.json")
 ```
 

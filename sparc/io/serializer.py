@@ -25,10 +25,8 @@ _FORMAT = "gcw-circuit-v1"
 
 
 def _unwrap_root(root: object) -> CircuitNode:
-    if hasattr(root, "root"):
-        return root.root  # type: ignore[no-any-return]
     if not isinstance(root, CircuitNode):
-        raise TypeError(f"Expected CircuitNode or Circuit, got {type(root)!r}")
+        raise TypeError(f"Expected CircuitNode, got {type(root)!r}")
     return root
 
 
@@ -114,13 +112,13 @@ def _validate_categorical_params(scope: List[int], params: Any) -> List[float]:
 
 def _instantiate(kind: str, *, node_id: int, children, scope, params) -> CircuitNode:
     if kind == "sum":
-        return SumNode(node_id, children, params)
+        return SumNode(children, params, id=node_id)
     if kind == "product":
-        return ProductNode(node_id, children)
+        return ProductNode(children, id=node_id)
     if kind == "categorical":
         assert scope is not None
         probs = _validate_categorical_params(scope, params)
-        return CategoricalInputNode(node_id, scope[0], probs)
+        return CategoricalInputNode(scope[0], probs, id=node_id)
     raise ValueError(f"Unknown kind {kind!r}")
 
 
@@ -136,7 +134,7 @@ class CircuitSerializer:
         """Serialize a circuit root to a JSON string.
 
         Args:
-            root: :class:`~sparc.circuit.Circuit` or :class:`~sparc.nodes.CircuitNode`.
+            root: :class:`~sparc.nodes.CircuitNode`.
             indent: JSON indentation level, or ``None`` for compact output.
 
         Returns:
@@ -211,23 +209,29 @@ class CircuitSerializer:
                 scope = [int(x) for x in rec["scope"]]
                 if len(scope) != 1:
                     raise ValueError(f"bernoulli leaf requires a single-variable scope; got {scope!r}")
-                built[nid] = BernoulliInputNode(nid, scope[0], float(rec["p"]))
+                built[nid] = BernoulliInputNode(scope[0], float(rec["p"]), id=nid)
             elif kind == "literal":
                 scope = [int(x) for x in rec["scope"]]
                 if len(scope) != 1:
                     raise ValueError(f"literal leaf requires a single-variable scope; got {scope!r}")
-                built[nid] = LiteralInputNode(nid, scope[0], int(rec["value"]))
+                built[nid] = LiteralInputNode(scope[0], int(rec["value"]), id=nid)
             elif kind == "indicator":
                 scope = [int(x) for x in rec["scope"]]
                 if len(scope) != 1:
                     raise ValueError(f"indicator leaf requires a single-variable scope; got {scope!r}")
-                built[nid] = IndicatorInputNode(nid, scope[0], int(rec["value"]), int(rec["num_cats"]))
+                built[nid] = IndicatorInputNode(
+                    scope[0], int(rec["value"]), int(rec["num_cats"]), id=nid
+                )
             elif kind == "discrete_logistic":
                 scope = [int(x) for x in rec["scope"]]
                 if len(scope) != 1:
                     raise ValueError(f"discrete_logistic leaf requires a single-variable scope; got {scope!r}")
                 built[nid] = DiscreteLogisticInputNode(
-                    nid, scope[0], float(rec["mu"]), float(rec["s"]), int(rec["num_cats"])
+                    scope[0],
+                    float(rec["mu"]),
+                    float(rec["s"]),
+                    int(rec["num_cats"]),
+                    id=nid,
                 )
             else:
                 raise ValueError(f"Unknown kind {kind!r}")
@@ -243,7 +247,7 @@ class CircuitSerializer:
         """Write a circuit to a JSON file.
 
         Args:
-            root: :class:`~sparc.circuit.Circuit` or :class:`~sparc.nodes.CircuitNode`.
+            root: :class:`~sparc.nodes.CircuitNode`.
             path: Output file path.
             indent: JSON indentation level.
             encoding: File encoding.

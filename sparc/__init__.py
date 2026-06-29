@@ -2,10 +2,10 @@
 
 SparC implements probabilistic circuits (PCs) with typed Cython evaluation,
 differentiable Wasserstein-type queries, and composable structure builders.
-Import the high-level :class:`~sparc.circuit.Circuit` wrapper and query
-functions from this package; see subpackages :mod:`sparc.optim`,
-:mod:`sparc.builders`, :mod:`sparc.structures`, and :mod:`sparc.io` for
-training, random construction, built-in structures, and serialization.
+Import node types and query functions from this package; see subpackages
+:mod:`sparc.optim`, :mod:`sparc.builders`, :mod:`sparc.structures`, and
+:mod:`sparc.io` for training, random construction, built-in structures, and
+serialization.
 
 Install from PyPI with ``pip install sparc-pc`` (import name: ``sparc``).
 Full documentation: https://sparc-docs.readthedocs.io
@@ -22,7 +22,6 @@ except PackageNotFoundError:
     __version__ = "0.0.0+dev"
 
 __all__ = [
-    "Circuit",
     "CircuitNode",
     "SumNode",
     "ProductNode",
@@ -59,7 +58,6 @@ __all__ = [
 ]
 
 _LAZY_EXPORTS = {
-    "Circuit": ("sparc.circuit", "Circuit"),
     "CompiledCircuit": ("sparc._graph", "CompiledCircuit"),
     "likelihood": ("sparc.eval", "likelihood"),
     "log_likelihood": ("sparc.eval", "log_likelihood"),

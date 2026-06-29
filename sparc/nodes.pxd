@@ -32,6 +32,7 @@ cdef class CircuitNode:
     cdef unordered_set[int] scope
 
     cdef void _propagate_scope_impl(self, unordered_set[size_t]& visited) except *
+    cdef void _ensure_scope(self) except *
     cpdef void propagate_scope(self) except *
     cpdef list scope_as_list(self)
     cpdef void set_scope_from_iterable(self, object indices) except *
