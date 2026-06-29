@@ -200,11 +200,9 @@ cdef class _LLGradContext:
         cdef double inv_n
         cdef double ll
         cdef GradBundle grads
-        cdef int max_var = _max_var_from_scope(root.scope)
         if root.scope.size() == 0:
-            raise ValueError(
-                "root scope is empty; call propagate_scope() on the circuit first"
-            )
+            root.propagate_scope()
+        cdef int max_var = _max_var_from_scope(root.scope)
         if n == 0:
             raise ValueError("dataset must contain at least one datapoint")
         inv_n = 1.0 / <double>n
@@ -370,9 +368,7 @@ def mean_log_likelihood_and_grad(CircuitNode root, object dataset, object var_to
     cdef bint allow_missing
     arr, allow_missing = _coerce_likelihood_data_with_missing(dataset, False)
     if root.scope.size() == 0:
-        raise ValueError(
-            "root scope is empty; call propagate_scope() on the circuit first"
-        )
+        root.propagate_scope()
     return _LLGradContext().solve_dataset(root, arr, var_to_col, allow_missing)
 
 

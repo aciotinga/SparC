@@ -1,7 +1,7 @@
 # Structures
 
 The [`sparc.structures`][sparc.structures] subpackage provides ready-made
-circuit constructors. Each returns a [`Circuit`][sparc.circuit.Circuit].
+circuit constructors. Each returns a [`CircuitNode`][sparc.nodes.CircuitNode] root.
 
 ## Built-in structures
 

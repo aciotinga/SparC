@@ -5,8 +5,7 @@ import pytest
 
 from sparc import (
     CategoricalInputNode,
-    Circuit,
-    ProductNode,
+        ProductNode,
     SumNode,
     likelihood,
     sample,
@@ -15,17 +14,17 @@ from tests.sparc_helpers import assignment_array
 
 
 def _simple_product_circuit():
-    x0 = CategoricalInputNode(id=0, scope_var=3, probabilities=[0.7, 0.3])
-    x1 = CategoricalInputNode(id=1, scope_var=17, probabilities=[0.5, 0.5])
-    prod = ProductNode(id=2, children=[x0, x1])
+    x0 = CategoricalInputNode(scope_var=3, probabilities=[0.7, 0.3])
+    x1 = CategoricalInputNode(scope_var=17, probabilities=[0.5, 0.5])
+    prod = ProductNode(children=[x0, x1])
     prod.propagate_scope()
     return prod
 
 
 def _weighted_sum_circuit():
-    leaf_a = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.8, 0.2])
-    leaf_b = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.2, 0.8])
-    root = SumNode(id=2, children=[leaf_a, leaf_b], parameters=[0.6, 0.4])
+    leaf_a = CategoricalInputNode(scope_var=0, probabilities=[0.8, 0.2])
+    leaf_b = CategoricalInputNode(scope_var=0, probabilities=[0.2, 0.8])
+    root = SumNode(children=[leaf_a, leaf_b], parameters=[0.6, 0.4])
     root.propagate_scope()
     return root
 
@@ -54,9 +53,9 @@ def test_sample_returns_2d_ndarray():
         assert draws[r, 17] in (0, 1)
 
 
-def test_circuit_wrapper_sample():
-    circuit = Circuit(_simple_product_circuit())
-    draws = circuit.sample(3, seed=7)
+def test_root_sample():
+    root = _simple_product_circuit()
+    draws = root.sample(3, seed=7)
     assert draws.shape == (3, 18)
     for r in range(3):
         assert draws[r, 3] in (0, 1)
@@ -76,19 +75,19 @@ def test_negative_n_samples_raises():
         sample(root, -1, seed=0)
 
 
-def test_empty_scope_raises():
-    x0 = CategoricalInputNode(id=0, scope_var=3, probabilities=[0.7, 0.3])
-    x1 = CategoricalInputNode(id=1, scope_var=17, probabilities=[0.5, 0.5])
-    prod = ProductNode(id=2, children=[x0, x1])
-    with pytest.raises(ValueError, match="scope is empty"):
-        sample(prod, 1, seed=0)
+def test_sample_auto_propagates_scope():
+    x0 = CategoricalInputNode(scope_var=3, probabilities=[0.7, 0.3])
+    x1 = CategoricalInputNode(scope_var=17, probabilities=[0.5, 0.5])
+    prod = ProductNode(children=[x0, x1])
+    draws = sample(prod, 1, seed=0)
+    assert draws.shape == (1, 18)
 
 
 def test_sampled_assignments_have_positive_likelihood():
-    circuit = Circuit(_simple_product_circuit())
-    draws = circuit.sample(30, seed=99)
+    root = _simple_product_circuit()
+    draws = root.sample(30, seed=99)
     for r in range(draws.shape[0]):
-        p = circuit.likelihood(draws[r])
+        p = root.likelihood(draws[r])
         assert p > 0.0
         assert math.isfinite(p)
 
@@ -104,10 +103,10 @@ def test_empirical_marginals_match_mixture():
 
 
 def test_dag_shared_subtree_samples_valid_assignments():
-    x0 = CategoricalInputNode(id=0, scope_var=3, probabilities=[0.7, 0.3])
-    x1 = CategoricalInputNode(id=1, scope_var=17, probabilities=[0.5, 0.5])
-    shared = ProductNode(id=2, children=[x0, x1])
-    root = SumNode(id=3, children=[shared], parameters=[1.0])
+    x0 = CategoricalInputNode(scope_var=3, probabilities=[0.7, 0.3])
+    x1 = CategoricalInputNode(scope_var=17, probabilities=[0.5, 0.5])
+    shared = ProductNode(children=[x0, x1])
+    root = SumNode(children=[shared], parameters=[1.0])
     root.propagate_scope()
     draws = sample(root, 10, seed=5)
     for r in range(draws.shape[0]):

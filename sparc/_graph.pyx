@@ -604,11 +604,8 @@ cdef class CompiledCircuit:
         self._metric_pools = {}
 
     def __init__(self, root):
-        from sparc.circuit import Circuit
-        if isinstance(root, Circuit):
-            root = root.root
         if not isinstance(root, CircuitNode):
-            raise TypeError("CompiledCircuit expects a CircuitNode or Circuit")
+            raise TypeError("CompiledCircuit expects a CircuitNode")
         cdef CircuitNode r = <CircuitNode>root
         if r.scope.size() == 0:
             r.propagate_scope()

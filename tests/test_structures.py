@@ -27,13 +27,13 @@ def _enumerate_ll_sum(circuit, num_vars, num_states):
     total = 0.0
     for combo in itertools.product(range(num_states), repeat=num_vars):
         row = np.array(combo, dtype=np.int32)
-        total += likelihood(circuit.root, row)
+        total += likelihood(circuit, row)
     return total
 
 
 def test_hmm_builds_and_normalizes():
     circuit = HMM(seq_length=4, num_latents=3, num_emits=2, seed=0)
-    assert set(circuit.root.scope_as_list()) == set(range(4))
+    assert set(circuit.scope_as_list()) == set(range(4))
     assert _enumerate_ll_sum(circuit, 4, 2) == pytest.approx(1.0)
     sample = circuit.sample(1, seed=1)[0]
     assert (sample[range(4)] >= 0).all()
@@ -44,7 +44,7 @@ def test_generalized_hmm_custom_emission():
     circuit = GeneralizedHMM(
         seq_length=5, num_latents=2, input_dist=Bernoulli(), seed=0
     )
-    assert set(circuit.root.scope_as_list()) == set(range(5))
+    assert set(circuit.scope_as_list()) == set(range(5))
     assert _enumerate_ll_sum(circuit, 5, 2) == pytest.approx(1.0)
 
 
@@ -53,20 +53,20 @@ def test_rat_spn_builds_and_normalizes():
         num_vars=5, num_latents=2, depth=2, num_repetitions=2,
         num_pieces=2, num_cats=2, seed=0,
     )
-    assert set(circuit.root.scope_as_list()) == set(range(5))
+    assert set(circuit.scope_as_list()) == set(range(5))
     assert _enumerate_ll_sum(circuit, 5, 2) == pytest.approx(1.0)
 
 
 def test_hclt_builds_and_normalizes():
     data = np.random.RandomState(0).randint(0, 2, size=(80, 5))
     circuit = HCLT(data, num_latents=3, num_bins=4, num_cats=2, seed=0)
-    assert set(circuit.root.scope_as_list()) == set(range(5))
+    assert set(circuit.scope_as_list()) == set(range(5))
     assert _enumerate_ll_sum(circuit, 5, 2) == pytest.approx(1.0)
 
 
 def test_pd_builds_and_normalizes():
     circuit = PD(data_shape=(2, 3), num_latents=2, num_cats=2, seed=0)
-    assert set(circuit.root.scope_as_list()) == set(range(6))
+    assert set(circuit.scope_as_list()) == set(range(6))
     assert _enumerate_ll_sum(circuit, 6, 2) == pytest.approx(1.0)
 
 
@@ -75,7 +75,7 @@ def test_pd_prod_dominated():
         data_shape=(2, 2), num_latents=2, num_cats=2,
         structure_type="prod_dominated", seed=0,
     )
-    assert set(circuit.root.scope_as_list()) == set(range(4))
+    assert set(circuit.scope_as_list()) == set(range(4))
     assert _enumerate_ll_sum(circuit, 4, 2) == pytest.approx(1.0)
 
 
@@ -85,7 +85,7 @@ def test_pdhclt_builds_and_normalizes():
         data, data_shape=(2, 3), num_latents=2, num_cats=2,
         num_bins=4, max_split_depth=1, seed=0,
     )
-    assert set(circuit.root.scope_as_list()) == set(range(6))
+    assert set(circuit.scope_as_list()) == set(range(6))
     assert _enumerate_ll_sum(circuit, 6, 2) == pytest.approx(1.0)
 
 

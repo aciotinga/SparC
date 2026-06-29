@@ -9,8 +9,7 @@ from numpy.testing import assert_allclose
 from sparc import (
     BernoulliInputNode,
     CategoricalInputNode,
-    Circuit,
-    ProductNode,
+        ProductNode,
     SumNode,
     mean_log_likelihood_and_grad,
 )
@@ -47,26 +46,26 @@ class TestSimplexStep:
 
 class TestIterNodes:
     def test_visits_each_node_once(self):
-        l0 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-        l1 = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
-        prod = ProductNode(id=2, children=[l0, l1])
-        root = SumNode(id=3, children=[prod], parameters=[1.0])
+        l0 = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        l1 = CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5])
+        prod = ProductNode(children=[l0, l1])
+        root = SumNode(children=[prod], parameters=[1.0])
         ids = [node.id for node in iter_nodes(root)]
         assert sorted(ids) == [0, 1, 2, 3]
 
     def test_dag_shared_subtree_once_per_object(self):
-        leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-        root = SumNode(id=1, children=[leaf, leaf], parameters=[0.5, 0.5])
+        leaf = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        root = SumNode(children=[leaf, leaf], parameters=[0.5, 0.5])
         seen = list(iter_nodes(root))
         assert len(seen) == 2  # sum + one leaf object, shared pointer
 
 
 class TestApplyGrads:
     def test_only_touches_nodes_in_grad_dict(self):
-        leaf_a = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-        leaf_b = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.2, 0.8])
-        root = SumNode(id=2, children=[leaf_a, leaf_b], parameters=[0.6, 0.4])
-        circuit = Circuit(root)
+        leaf_a = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        leaf_b = CategoricalInputNode(scope_var=0, probabilities=[0.2, 0.8])
+        root = SumNode(children=[leaf_a, leaf_b], parameters=[0.6, 0.4])
+        circuit = root
         before_b = leaf_b.probabilities_list()
         data = np.array([[0], [1], [0]], dtype=np.int32)
         _, grads = mean_log_likelihood_and_grad(root, data)
@@ -77,9 +76,9 @@ class TestApplyGrads:
         assert leaf_a.probabilities_list() != pytest.approx([0.5, 0.5])
 
     def test_matches_manual_simplex_step(self):
-        leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.4, 0.6])
-        root = SumNode(id=1, children=[leaf], parameters=[1.0])
-        circuit = Circuit(root)
+        leaf = CategoricalInputNode(scope_var=0, probabilities=[0.4, 0.6])
+        root = SumNode(children=[leaf], parameters=[1.0])
+        circuit = root
         grad_vec = [0.3, -0.3]
         manual = simplex_step(
             leaf.probabilities_list(), grad_vec, 0.05, ascent=True
@@ -89,9 +88,9 @@ class TestApplyGrads:
 
     @pytest.mark.parametrize("method", ["tangent", "euclidean"])
     def test_bernoulli_leaf_updated(self, method):
-        leaf = BernoulliInputNode(id=0, scope_var=0, p=0.3)
-        root = SumNode(id=1, children=[leaf], parameters=[1.0])
-        circuit = Circuit(root)
+        leaf = BernoulliInputNode(scope_var=0, p=0.3)
+        root = SumNode(children=[leaf], parameters=[1.0])
+        circuit = root
         apply_grads(
             circuit, ({}, {0: [0.5, -0.5]}), lr=0.02, ascent=True, method=method
         )
@@ -111,21 +110,21 @@ class TestGlobalGradNorm:
 class TestMLETrainer:
     def test_increases_mean_ll_on_synthetic_data(self):
         truth_leaf = CategoricalInputNode(
-            id=0, scope_var=0, probabilities=[0.7, 0.3]
+            scope_var=0, probabilities=[0.7, 0.3]
         )
-        truth = Circuit(truth_leaf)
+        truth = truth_leaf
         data = truth.sample(200, seed=0)
         model_leaf = CategoricalInputNode(
-            id=0, scope_var=0, probabilities=[0.5, 0.5]
+            scope_var=0, probabilities=[0.5, 0.5]
         )
-        model = Circuit(model_leaf)
+        model = model_leaf
         trainer = MLETrainer(model, lr=0.3)
         hist = trainer.fit(data, epochs=25)
         assert hist[-1] > hist[0]
 
     def test_euclidean_method_runs(self):
-        leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.5])
-        circuit = Circuit(leaf)
+        leaf = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.5])
+        circuit = leaf
         data = np.array([[0], [1], [0]], dtype=np.int32)
         trainer = MLETrainer(circuit, lr=0.1, method="euclidean")
         ll = trainer.step(data)

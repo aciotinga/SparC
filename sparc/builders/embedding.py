@@ -8,7 +8,7 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from sparc.circuit import Circuit
+from sparc.nodes import CircuitNode, SumNode
 
 from sparc.builders._factory import _NodeFactory
 from sparc.builders.region_graph import Partition, Region
@@ -75,11 +75,11 @@ class RegionEmbeddingBuilder:
         self.alpha = alpha
         self.scope_offset = scope_offset
 
-    def build(self) -> Circuit:
+    def build(self) -> CircuitNode:
         """Construct and return the circuit.
 
         Returns:
-            A :class:`~sparc.circuit.Circuit` with randomly initialized
+            Root :class:`~sparc.nodes.CircuitNode` with randomly initialized
             parameters following the region graph structure.
         """
         factory = _NodeFactory()
@@ -90,7 +90,7 @@ class RegionEmbeddingBuilder:
                 self._partition_to_product_nodes(partition, region_cache, factory)
             )
         sum_params = np.random.dirichlet(np.ones(len(children)) * self.sum_concentration)
-        return Circuit(factory.sum(children, sum_params))
+        return factory.sum(children, sum_params)
 
     def _partition_to_product_nodes(self, partition: Partition, region_cache, factory):
         sub_regions = [
@@ -184,18 +184,18 @@ class EmbeddingBuilder:
         self.alpha = alpha
         self.scope_offset = scope_offset
 
-    def build(self) -> Circuit:
+    def build(self) -> CircuitNode:
         """Construct and return the circuit.
 
         Returns:
-            A :class:`~sparc.circuit.Circuit` with randomly initialized
+            Root :class:`~sparc.nodes.CircuitNode` with randomly initialized
             parameters over variables
             ``scope_offset .. scope_offset + num_vars - 1``.
         """
         factory = _NodeFactory()
         scope = frozenset(range(self.scope_offset, self.scope_offset + self.num_vars))
         root = self._build(scope, {}, {}, {}, factory)
-        return Circuit(root)
+        return root
 
     def _leaf_pmf(self):
         if self.input_distribution == "binomial":

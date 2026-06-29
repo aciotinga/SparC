@@ -10,15 +10,15 @@ A probabilistic circuit is a DAG of **sum** (mixture), **product**
 
 ```python
 import numpy as np
-from sparc import CategoricalInputNode, SumNode, ProductNode, Circuit
+from sparc import CategoricalInputNode, SumNode, ProductNode, CircuitNode
 
 # Two categorical variables mixed by a sum over their product
-x0 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.7, 0.3])
-x1 = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
-prod = ProductNode(id=2, children=[x0, x1])
-root = SumNode(id=3, children=[prod], parameters=[1.0])
+x0 = CategoricalInputNode(scope_var=0, probabilities=[0.7, 0.3])
+x1 = CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5])
+prod = ProductNode(children=[x0, x1])
+root = SumNode(children=[prod], parameters=[1.0])
 
-circuit = Circuit(root)
+circuit = root
 ```
 
 ## Inference
@@ -48,7 +48,7 @@ samples = circuit.sample(5, seed=0)  # shape (5, max_var+1), int32
 
 ```python
 circuit.save("model.json")
-loaded = Circuit.load("model.json")
+loaded = CircuitNode.load("model.json")
 ```
 
 See [Serialization](../guides/serialization.md) for the on-disk format and

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sparc.circuit import Circuit
+from sparc.nodes import CircuitNode
 from sparc.grad import GradBundle
 from sparc.optim import apply_grads, global_grad_norm
 from sparc.queries import gcw_crossterm, gcw_crossterm_and_grad
@@ -107,14 +107,12 @@ def resolve_eval_datasets(dataset_name: str, dataset_k: int) -> tuple[np.ndarray
     return load_csv_data(original_path), load_csv_data(adversarial_path)
 
 
-def mean_log_likelihood(circuit: Circuit, rows: np.ndarray) -> float:
+def mean_log_likelihood(circuit: CircuitNode, rows: np.ndarray) -> float:
     return float(circuit.compile().log_likelihood(rows).mean())
 
 
 def sample_log_exp_p_query(
-    p_theta: Circuit,
-    q_phi: Circuit,
-    *,
+    p_theta:     q_phi:     *,
     num_samples: int,
     seed: int | None = None,
 ) -> float:
@@ -126,9 +124,7 @@ def sample_log_exp_p_query(
 
 
 def sample_log_exp_p_query_and_grad(
-    p_theta: Circuit,
-    q_phi: Circuit,
-    *,
+    p_theta:     q_phi:     *,
     num_samples: int,
     seed: int | None = None,
 ) -> tuple[float, GradBundle]:
@@ -225,10 +221,7 @@ def combine_phi_grads(logexp_grads, gcw_grads, lam):
 
 
 def update_q_phi(
-    p_theta: Circuit,
-    q_phi: Circuit,
-    p_hat: Circuit,
-    lam: float,
+    p_theta:     q_phi:     p_hat:     lam: float,
     *,
     k: float,
     gcw_kw: dict,
@@ -259,9 +252,7 @@ def update_q_phi(
 
 
 def update_p_theta(
-    p_theta: Circuit,
-    q_phi: Circuit,
-    *,
+    p_theta:     q_phi:     *,
     eta_theta: float,
     theta_num_samples: int,
     theta_seed: int | None,
@@ -273,8 +264,7 @@ def update_p_theta(
 
 
 def _eval_and_report(
-    p_theta: Circuit,
-    it: int,
+    p_theta:     it: int,
     *,
     original_data: np.ndarray,
     adversarial_data: np.ndarray,
@@ -486,8 +476,8 @@ def main():
 
     path = resolve_circuit_path(args.circuit)
     print(f"loading {path.name} from {path.parent}")
-    p_hat = Circuit.load(path)
-    print(f"  nodes in scope: {len(p_hat.root.scope_as_list())}")
+    p_hat = CircuitNode.load(path)
+    print(f"  nodes in scope: {len(p_hat.scope_as_list())}")
 
     original_data = adversarial_data = None
     plotter = None

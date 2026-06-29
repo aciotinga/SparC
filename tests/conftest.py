@@ -12,6 +12,7 @@ NO_DUAL_PATH_MODULES = frozenset(
         "test_compiled_eval",
         "test_compiled_queries",
         "test_refresh_parameters",
+        "test_node_api",
         "test_nodes",
         "test_nodes_extended",
         "test_solvers",
@@ -64,6 +65,13 @@ def use_compiled(request: pytest.FixtureRequest) -> bool:
 @pytest.fixture
 def circuit_backend(use_compiled: bool) -> CircuitBackend:
     return CircuitBackend(use_compiled)
+
+
+@pytest.fixture(autouse=True)
+def _reset_node_ids() -> None:
+    from sparc.nodes import reset_node_id_allocator
+
+    reset_node_id_allocator()
 
 
 @pytest.fixture(autouse=True)

@@ -25,7 +25,7 @@ from typing import List, Sequence
 import numpy as np
 
 from sparc.builders._factory import _NodeFactory
-from sparc.circuit import Circuit
+from sparc.nodes import CircuitNode
 from sparc.structures.distributions import InputDistribution
 
 Block = List[object]
@@ -98,8 +98,8 @@ def summate(
     return out
 
 
-def root_circuit(block: Block) -> Circuit:
-    """Wrap a size-1 block's single node as a :class:`Circuit` root."""
+def root_circuit(block: Block) -> CircuitNode:
+    """Return the single root node from a size-1 block."""
     if len(block) != 1:
         raise ValueError(f"root block must have exactly one node, got {len(block)}")
-    return Circuit(block[0])
+    return block[0]

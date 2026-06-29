@@ -8,7 +8,6 @@ from numpy.testing import assert_allclose
 
 from sparc import (
     CategoricalInputNode,
-    Circuit,
     CompiledCircuit,
     ProductNode,
     SumNode,
@@ -22,12 +21,12 @@ pytestmark = pytest.mark.eval
 
 
 def _mixed_circuit():
-    l0 = CategoricalInputNode(id=0, scope_var=5, probabilities=[0.6, 0.4])
-    l1 = CategoricalInputNode(id=1, scope_var=9, probabilities=[0.25, 0.75])
-    prod = ProductNode(id=2, children=[l0, l1])
-    l2 = CategoricalInputNode(id=3, scope_var=5, probabilities=[0.1, 0.9])
-    root = SumNode(id=4, children=[prod, l2], parameters=[0.7, 0.3])
-    return Circuit(root)
+    l0 = CategoricalInputNode(scope_var=5, probabilities=[0.6, 0.4])
+    l1 = CategoricalInputNode(scope_var=9, probabilities=[0.25, 0.75])
+    prod = ProductNode(children=[l0, l1])
+    l2 = CategoricalInputNode(scope_var=5, probabilities=[0.1, 0.9])
+    root = SumNode(children=[prod, l2], parameters=[0.7, 0.3])
+    return root
 
 
 class TestCompiledCircuit:
@@ -36,7 +35,7 @@ class TestCompiledCircuit:
         compiled = circuit.compile()
         n = 64
         rng = np.random.default_rng(0)
-        vars_ = sorted(circuit.root.scope_as_list())
+        vars_ = sorted(circuit.scope_as_list())
         cards = {v: 2 for v in vars_}
         width = max(vars_) + 1
         data = np.zeros((n, width), dtype=np.int32)
@@ -51,7 +50,7 @@ class TestCompiledCircuit:
         compiled = circuit.compile()
         n = 10_000
         rng = np.random.default_rng(42)
-        vars_ = sorted(circuit.root.scope_as_list())
+        vars_ = sorted(circuit.scope_as_list())
         width = max(vars_) + 1
         data = np.zeros((n, width), dtype=np.int32)
         for v in vars_:
@@ -92,7 +91,7 @@ class TestCompiledCircuit:
             compiled.log_likelihood(data)
 
     def test_direct_compiled_matches_object_path(self):
-        root = _mixed_circuit().root
+        root = _mixed_circuit()
         compiled = CompiledCircuit(root)
         row = assignment_array({5: 0, 9: 1})
         data = row.reshape(1, -1)
@@ -119,7 +118,7 @@ class TestCompiledCircuit:
     def test_batched_nan_matches_per_row(self):
         circuit = _mixed_circuit()
         compiled = circuit.compile()
-        width = max(circuit.root.scope_as_list()) + 1
+        width = max(circuit.scope_as_list()) + 1
         data = np.full((3, width), np.nan, dtype=np.float64)
         data[0, 5] = 0.0
         data[1, 9] = 1.0
@@ -145,13 +144,13 @@ class TestCompiledCircuit:
 
 
 class TestEvalPathParity:
-    """Object-path eval must agree with Circuit wrapper and compiled path."""
+    """Object-path eval must agree with root-node API and compiled path."""
 
     def test_likelihood_wrapper_vs_function(self):
         circuit = _mixed_circuit()
         row = assignment_array({5: 1, 9: 0})
         assert circuit.likelihood(row) == pytest.approx(
-            likelihood(circuit.root, row)
+            likelihood(circuit, row)
         )
 
     def test_log_likelihood_consistency(self):
@@ -162,21 +161,20 @@ class TestEvalPathParity:
         )
 
     def test_sample_wrapper_vs_function(self):
-        root = _mixed_circuit().root
+        root = _mixed_circuit()
         a = sample(root, 50, seed=7)
-        b = Circuit(root).sample(50, seed=7)
+        b = root.sample(50, seed=7)
         assert_allclose(a, b)
 
     def test_shared_subtree_eval_consistent(self):
-        leaf = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.2, 0.8])
+        leaf = CategoricalInputNode(scope_var=0, probabilities=[0.2, 0.8])
         shared = ProductNode(
-            id=1,
             children=[
                 leaf,
-                CategoricalInputNode(id=2, scope_var=1, probabilities=[0.5, 0.5]),
+                CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5]),
             ],
         )
-        root = SumNode(id=3, children=[shared, shared], parameters=[0.4, 0.6])
-        circuit = Circuit(root)
+        root = SumNode(children=[shared, shared], parameters=[0.4, 0.6])
+        circuit = root
         row = assignment_array({0: 1, 1: 0})
         assert circuit.likelihood(row) == pytest.approx(likelihood(root, row))

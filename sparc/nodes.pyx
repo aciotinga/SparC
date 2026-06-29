@@ -64,6 +64,41 @@ cdef void fill_vector_double(vector[double]& dest, object values) except *:
         dest.push_back(float(item))
 
 
+cdef size_t _next_node_id = 0
+
+
+cdef size_t _alloc_node_id() except *:
+    global _next_node_id
+    cdef size_t nid = _next_node_id
+    _next_node_id += 1
+    return nid
+
+
+cdef void _claim_node_id(size_t nid) noexcept:
+    global _next_node_id
+    if nid >= _next_node_id:
+        _next_node_id = nid + 1
+
+
+cdef size_t _resolve_node_id(object id) except *:
+    if id is None:
+        return _alloc_node_id()
+    cdef size_t nid = <size_t>int(id)
+    _claim_node_id(nid)
+    return nid
+
+
+def alloc_node_id():
+    """Allocate a fresh node id (for internal builders)."""
+    return int(_alloc_node_id())
+
+
+def reset_node_id_allocator():
+    """Reset the global node-id counter (for tests)."""
+    global _next_node_id
+    _next_node_id = 0
+
+
 # --- RNG ----------------------------------------------------------------------
 
 cdef class RandomState:
@@ -144,6 +179,7 @@ cdef class CircuitNode:
         self._propagate_scope_impl(visited)
 
     cpdef list scope_as_list(self):
+        self._ensure_scope()
         return sorted(self.scope)
 
     cpdef void set_scope_from_iterable(self, object indices) except *:
@@ -153,6 +189,110 @@ cdef class CircuitNode:
             if v < 0:
                 raise ValueError(f"scope indices must be non-negative, got {v}")
             self.scope.insert(<int>v)
+
+    cdef void _ensure_scope(self) except *:
+        if self.scope.size() == 0:
+            self.propagate_scope()
+
+    def likelihood(self, data, var_to_col=None):
+        from sparc.eval import likelihood
+        self._ensure_scope()
+        return likelihood(self, data, var_to_col)
+
+    def log_likelihood(self, data, var_to_col=None):
+        from sparc.eval import log_likelihood
+        self._ensure_scope()
+        return log_likelihood(self, data, var_to_col)
+
+    def mean_log_likelihood_and_grad(self, dataset, var_to_col=None):
+        from sparc.grad import mean_log_likelihood_and_grad
+        self._ensure_scope()
+        return mean_log_likelihood_and_grad(self, dataset, var_to_col)
+
+    def sample(self, n_samples, seed=None):
+        from sparc.eval import sample
+        self._ensure_scope()
+        return sample(self, n_samples, seed)
+
+    def compile(self):
+        from sparc._graph import CompiledCircuit
+        self._ensure_scope()
+        return CompiledCircuit(self)
+
+    def clone(self):
+        from sparc.node_clone import clone_node
+        return clone_node(self, {})
+
+    def save(self, path, *, indent=2, encoding="utf-8"):
+        from sparc.io.serializer import CircuitSerializer
+        CircuitSerializer.save(self, path, indent=indent, encoding=encoding)
+
+    @classmethod
+    def load(cls, path, *, encoding="utf-8"):
+        from sparc.io.serializer import CircuitSerializer
+        return CircuitSerializer.load(path, encoding=encoding)
+
+    def cw_distance(self, other, metric_p=1.0, scale_factor=1.0, metric=None):
+        from sparc.queries.cw import cw_distance
+        return cw_distance(self, other, metric_p, scale_factor, metric)
+
+    def cw_distance_and_grad(self, other, metric_p=1.0, scale_factor=1.0, metric=None):
+        from sparc.queries.cw import cw_distance_and_grad
+        return cw_distance_and_grad(self, other, metric_p, scale_factor, metric)
+
+    def gcw_crossterm(
+        self,
+        other,
+        metric_p=1.0,
+        scale_factor_1=1.0,
+        scale_factor_2=1.0,
+        metric1=None,
+        metric2=None,
+    ):
+        from sparc.queries.gcw import gcw_crossterm
+        return gcw_crossterm(
+            self, other, metric_p, scale_factor_1, scale_factor_2, metric1, metric2
+        )
+
+    def gcw_crossterm_and_grad(
+        self,
+        other,
+        metric_p=1.0,
+        scale_factor_1=1.0,
+        scale_factor_2=1.0,
+        metric1=None,
+        metric2=None,
+    ):
+        from sparc.queries.gcw import gcw_crossterm_and_grad
+        return gcw_crossterm_and_grad(
+            self, other, metric_p, scale_factor_1, scale_factor_2, metric1, metric2
+        )
+
+    def exp_query(self, other):
+        from sparc.queries.expectation import exp_query
+        return exp_query(self, other)
+
+    def exp_query_and_grad(self, other):
+        from sparc.queries.expectation import exp_query_and_grad
+        return exp_query_and_grad(self, other)
+
+    def log_exp_query(self, other):
+        from sparc.queries.expectation import log_exp_query
+        return log_exp_query(self, other)
+
+    def log_exp_query_and_grad(self, other):
+        from sparc.queries.expectation import log_exp_query_and_grad
+        return log_exp_query_and_grad(self, other)
+
+    def expected_squared_distance(self, metric_p=1.0, scale_factor=1.0, metric=None):
+        from sparc.queries.esd import expected_squared_distance
+        return expected_squared_distance(self, metric_p, scale_factor, metric)
+
+    def expected_squared_distance_and_grad(
+        self, metric_p=1.0, scale_factor=1.0, metric=None
+    ):
+        from sparc.queries.esd import expected_squared_distance_and_grad
+        return expected_squared_distance_and_grad(self, metric_p, scale_factor, metric)
 
 
 cdef CircuitNode node_from_ptr(PyObject* obj):
@@ -230,13 +370,14 @@ cdef class SumNode(InternalNode):
     """Mixture node: weighted sum over child sub-circuits.
 
     Args:
-        id: Unique node identifier.
         children: List of child :class:`CircuitNode` instances.
         parameters: Non-negative mixture weights summing to 1.
+        id: Optional unique node identifier (auto-assigned when omitted).
     """
 
-    def __init__(self, size_t id, object children, object parameters):
-        CircuitNode.__init__(self, id)
+    def __init__(self, object children, object parameters, *, object id=None):
+        cdef size_t node_id = _resolve_node_id(id)
+        CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_SUM
         self._child_refs = []
         if len(children) < 1:
@@ -279,13 +420,14 @@ cdef class ProductNode(InternalNode):
     """Factorization node: product over child sub-circuits with disjoint scopes.
 
     Args:
-        id: Unique node identifier.
         children: List of child :class:`CircuitNode` instances with pairwise
             disjoint scopes.
+        id: Optional unique node identifier (auto-assigned when omitted).
     """
 
-    def __init__(self, size_t id, object children):
-        CircuitNode.__init__(self, id)
+    def __init__(self, object children, *, object id=None):
+        cdef size_t node_id = _resolve_node_id(id)
+        CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_PRODUCT
         self._child_refs = []
         if len(children) < 1:
@@ -373,15 +515,16 @@ cdef class CategoricalInputNode(FiniteDiscreteInputNode):
     """Categorical leaf over a single variable.
 
     Args:
-        id: Unique node identifier.
         scope_var: Variable index (non-negative integer).
         probabilities: PMF over at least two outcomes, summing to 1.
+        id: Optional unique node identifier (auto-assigned when omitted).
     """
 
-    def __init__(self, size_t id, int scope_var, object probabilities):
+    def __init__(self, int scope_var, object probabilities, *, object id=None):
         if scope_var < 0:
             raise ValueError(f"scope_var must be non-negative, got {scope_var}")
-        CircuitNode.__init__(self, id)
+        cdef size_t node_id = _resolve_node_id(id)
+        CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_INPUT
         self.scope.clear()
         self.scope.insert(scope_var)
@@ -422,12 +565,13 @@ cdef class BernoulliInputNode(FiniteDiscreteInputNode):
     simplex-projected gradient path as the categorical leaf.
     """
 
-    def __init__(self, size_t id, int scope_var, double p):
+    def __init__(self, int scope_var, double p, *, object id=None):
         if scope_var < 0:
             raise ValueError(f"scope_var must be non-negative, got {scope_var}")
         if not isfinite(p) or p < 0.0 or p > 1.0:
             raise ValueError(f"bernoulli p must lie in [0, 1], got {p}")
-        CircuitNode.__init__(self, id)
+        cdef size_t node_id = _resolve_node_id(id)
+        CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_INPUT
         self.scope.clear()
         self.scope.insert(scope_var)
@@ -466,7 +610,7 @@ cdef class IndicatorInputNode(FiniteDiscreteInputNode):
     Carries no trainable parameters.
     """
 
-    def __init__(self, size_t id, int scope_var, int value, object num_cats):
+    def __init__(self, int scope_var, int value, object num_cats, *, object id=None):
         cdef Py_ssize_t k = int(num_cats)
         if scope_var < 0:
             raise ValueError(f"scope_var must be non-negative, got {scope_var}")
@@ -476,7 +620,8 @@ cdef class IndicatorInputNode(FiniteDiscreteInputNode):
             raise ValueError(
                 f"indicator value {value} out of range [0, {k})"
             )
-        CircuitNode.__init__(self, id)
+        cdef size_t node_id = _resolve_node_id(id)
+        CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_INPUT
         self.scope.clear()
         self.scope.insert(scope_var)
@@ -505,11 +650,12 @@ cdef class IndicatorInputNode(FiniteDiscreteInputNode):
 cdef class LiteralInputNode(FiniteDiscreteInputNode):
     """Deterministic boolean leaf (support ``{0, 1}``) clamped to ``value``."""
 
-    def __init__(self, size_t id, int scope_var, object value):
+    def __init__(self, int scope_var, object value, *, object id=None):
         cdef int v = 1 if value else 0
         if scope_var < 0:
             raise ValueError(f"scope_var must be non-negative, got {scope_var}")
-        CircuitNode.__init__(self, id)
+        cdef size_t node_id = _resolve_node_id(id)
+        CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_INPUT
         self.scope.clear()
         self.scope.insert(scope_var)
@@ -542,7 +688,9 @@ cdef class DiscreteLogisticInputNode(FiniteDiscreteInputNode):
     likelihood, sampling, and all transport / expectation queries).
     """
 
-    def __init__(self, size_t id, int scope_var, double mu, double s, object num_cats):
+    def __init__(
+        self, int scope_var, double mu, double s, object num_cats, *, object id=None
+    ):
         cdef Py_ssize_t k = int(num_cats)
         if scope_var < 0:
             raise ValueError(f"scope_var must be non-negative, got {scope_var}")
@@ -552,7 +700,8 @@ cdef class DiscreteLogisticInputNode(FiniteDiscreteInputNode):
             raise ValueError("discrete logistic mu must be finite")
         if not isfinite(s) or s <= 0.0:
             raise ValueError(f"discrete logistic s must be positive, got {s}")
-        CircuitNode.__init__(self, id)
+        cdef size_t node_id = _resolve_node_id(id)
+        CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_INPUT
         self.scope.clear()
         self.scope.insert(scope_var)

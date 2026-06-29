@@ -6,7 +6,7 @@ Fast inference uses a pre-built **`CompiledCircuit`** ([`sparc._graph.CompiledCi
 
 | Tier | Input | Path |
 |------|-------|------|
-| Object-graph | `Circuit` / `CircuitNode` | Memoized recursion on live nodes (GIL) |
+| Object-graph | `CircuitNode` | Memoized recursion on live nodes (GIL) |
 | Flat / nogil | `CompiledCircuit` | CSR layout, precomputed PMFs, `nogil` numeric cores |
 
 Compile once when topology is fixed:
@@ -25,11 +25,11 @@ compiled.refresh_parameters()
 ## Requirements
 
 - All leaves must be [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode] (any subclass; PMFs materialized via `pmf_at` at compile time).
-- Non-discrete custom `InputNode` subclasses remain object-graph-only via `Circuit`.
+- Non-discrete custom `InputNode` subclasses remain object-graph-only on the root `CircuitNode`.
 
 ## Pairwise queries
 
-CW, GCW, and expectation queries require **both** operands to be `CompiledCircuit` for the flat path. Mixed `Circuit` + `CompiledCircuit` raises `TypeError`.
+CW, GCW, and expectation queries require **both** operands to be `CompiledCircuit` for the flat path. Mixed `CircuitNode` + `CompiledCircuit` raises `TypeError`.
 
 Module-level functions (`cw_distance`, `gcw_crossterm`, …) dispatch on operand type automatically.
 

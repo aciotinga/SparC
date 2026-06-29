@@ -11,7 +11,6 @@ from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Union
 
 import numpy as np
 
-from sparc.circuit import Circuit
 from sparc.nodes import (
     BernoulliInputNode,
     CategoricalInputNode,
@@ -107,7 +106,7 @@ def _grad_dicts(grads: GradLike):
 
 
 def apply_grads(
-    circuit: Union[Circuit, CircuitNode],
+    circuit: CircuitNode,
     grads: GradLike,
     lr: float,
     *,
@@ -120,14 +119,14 @@ def apply_grads(
     Only nodes whose ``id`` appears in the gradient dicts are updated.
 
     Args:
-        circuit: :class:`~sparc.circuit.Circuit` or root :class:`~sparc.nodes.CircuitNode`.
+        circuit: Root :class:`~sparc.nodes.CircuitNode`.
         grads: :class:`~sparc.grad.GradBundle` or ``(sum_grads, cat_grads)`` tuple.
         lr: Step size passed to :func:`simplex_step`.
         ascent: If ``True``, ascend along the gradient; otherwise descend.
         method: Simplex projection method (``"tangent"`` or ``"euclidean"``).
         prob_floor: Minimum probability per entry after projection.
     """
-    root = circuit.root if isinstance(circuit, Circuit) else circuit
+    root = circuit
     sum_grads, cat_grads = _grad_dicts(grads)
     for node in iter_nodes(root):
         nid = int(node.id)
@@ -168,7 +167,7 @@ class MLETrainer:
     place using :func:`apply_grads` on the mean log-likelihood gradient.
 
     Args:
-        circuit: Circuit whose parameters are optimized in place.
+        circuit: Root node whose parameters are optimized in place.
         lr: Learning rate for each projected gradient step.
         method: Simplex projection method (``"tangent"`` or ``"euclidean"``).
         prob_floor: Minimum probability per entry after each step.
@@ -176,7 +175,7 @@ class MLETrainer:
 
     def __init__(
         self,
-        circuit: Circuit,
+        circuit: CircuitNode,
         lr: float = 1e-2,
         *,
         method: str = "tangent",

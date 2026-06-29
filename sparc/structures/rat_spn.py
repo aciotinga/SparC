@@ -15,7 +15,7 @@ from typing import List, Optional, Sequence
 import numpy as np
 
 from sparc.builders._factory import _NodeFactory
-from sparc.circuit import Circuit
+from sparc.nodes import CircuitNode
 from sparc.structures._blocks import (
     input_block,
     product_block,
@@ -46,7 +46,7 @@ def RAT_SPN(
     num_cats: int = 256,
     sum_concentration: float = 1.0,
     seed: Optional[int] = None,
-) -> Circuit:
+) -> CircuitNode:
     """Build a randomized tensorized sum-product circuit.
 
     Parameters

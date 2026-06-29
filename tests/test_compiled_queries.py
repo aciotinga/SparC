@@ -6,8 +6,7 @@ import pytest
 
 from sparc import (
     CategoricalInputNode,
-    Circuit,
-    ProductNode,
+        ProductNode,
     SumNode,
     cw_distance,
     cw_distance_and_grad,
@@ -19,12 +18,12 @@ pytestmark = pytest.mark.eval
 
 
 def _simple_pair():
-    l0 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.6, 0.4])
-    l1 = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
-    p = ProductNode(id=2, children=[l0, l1])
-    r1 = SumNode(id=3, children=[p], parameters=[1.0])
-    r2 = SumNode(id=4, children=[p], parameters=[1.0])
-    return Circuit(r1), Circuit(r2)
+    l0 = CategoricalInputNode(scope_var=0, probabilities=[0.6, 0.4])
+    l1 = CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5])
+    p = ProductNode(children=[l0, l1])
+    r1 = SumNode(children=[p], parameters=[1.0])
+    r2 = SumNode(children=[p], parameters=[1.0])
+    return r1, r2
 
 
 def test_cw_compiled_matches_object():

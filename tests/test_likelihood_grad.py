@@ -4,7 +4,7 @@
 carries the gradient of the mean log-likelihood w.r.t. the circuit's linear
 parameters (sum weights and categorical probabilities), keyed by ``node.id``.
 
-The value is checked against averaging ``Circuit.log_likelihood`` over the
+The value is checked against averaging ``log_likelihood`` over the
 dataset, and every gradient vector is checked against a symmetric
 finite-difference reference on the simplex tangent.
 """
@@ -15,23 +15,22 @@ from numpy.testing import assert_allclose
 
 from sparc import (
     CategoricalInputNode,
-    Circuit,
-    ProductNode,
+        ProductNode,
     SumNode,
     mean_log_likelihood_and_grad,
 )
 
 
 def _structured_circuit():
-    cat_a0 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.5, 0.3, 0.2])
-    cat_b0 = CategoricalInputNode(id=1, scope_var=0, probabilities=[0.1, 0.6, 0.3])
-    sum_x0 = SumNode(id=2, children=[cat_a0, cat_b0], parameters=[0.7, 0.3])
+    cat_a0 = CategoricalInputNode(scope_var=0, probabilities=[0.5, 0.3, 0.2])
+    cat_b0 = CategoricalInputNode(scope_var=0, probabilities=[0.1, 0.6, 0.3])
+    sum_x0 = SumNode(children=[cat_a0, cat_b0], parameters=[0.7, 0.3])
 
-    cat_c1 = CategoricalInputNode(id=3, scope_var=1, probabilities=[0.25, 0.75])
-    cat_d1 = CategoricalInputNode(id=4, scope_var=1, probabilities=[0.8, 0.2])
-    sum_x1 = SumNode(id=5, children=[cat_c1, cat_d1], parameters=[0.4, 0.6])
+    cat_c1 = CategoricalInputNode(scope_var=1, probabilities=[0.25, 0.75])
+    cat_d1 = CategoricalInputNode(scope_var=1, probabilities=[0.8, 0.2])
+    sum_x1 = SumNode(children=[cat_c1, cat_d1], parameters=[0.4, 0.6])
 
-    root = ProductNode(id=6, children=[sum_x0, sum_x1])
+    root = ProductNode(children=[sum_x0, sum_x1])
     root.propagate_scope()
     return root
 
@@ -88,7 +87,7 @@ def _tangent(grad):
 
 def test_value_matches_average_log_likelihood():
     root = _structured_circuit()
-    pc = Circuit(root)
+    pc = root
     data = _dataset()
 
     mean_ll, grads = mean_log_likelihood_and_grad(root, data)
@@ -100,7 +99,7 @@ def test_value_matches_average_log_likelihood():
 
 def test_circuit_method_matches_function():
     root = _structured_circuit()
-    pc = Circuit(root)
+    pc = root
     data = _dataset(seed=3)
 
     m1, g1 = pc.mean_log_likelihood_and_grad(data)
@@ -155,7 +154,7 @@ def test_categorical_gradients_match_finite_difference(node_id):
 
 def test_compiled_grad_matches_object_path():
     root = _structured_circuit()
-    pc = Circuit(root)
+    pc = root
     data = _dataset(seed=4)
     compiled = pc.compile()
 
@@ -205,16 +204,16 @@ def test_gradient_ascent_increases_likelihood():
 
 
 def _product_circuit():
-    x0 = CategoricalInputNode(id=0, scope_var=0, probabilities=[0.7, 0.3])
-    x1 = CategoricalInputNode(id=1, scope_var=1, probabilities=[0.5, 0.5])
-    root = ProductNode(id=2, children=[x0, x1])
+    x0 = CategoricalInputNode(scope_var=0, probabilities=[0.7, 0.3])
+    x1 = CategoricalInputNode(scope_var=1, probabilities=[0.5, 0.5])
+    root = ProductNode(children=[x0, x1])
     root.propagate_scope()
     return root
 
 
 def test_marginal_mean_ll_matches_compile():
     root = _product_circuit()
-    pc = Circuit(root)
+    pc = root
     data = np.array(
         [
             [0.0, np.nan],
@@ -256,7 +255,7 @@ def test_marginal_grad_missing_leaf_is_zero():
 
 def test_marginal_compiled_grad_matches_object_path():
     root = _product_circuit()
-    pc = Circuit(root)
+    pc = root
     data = np.array(
         [
             [0.0, np.nan],
