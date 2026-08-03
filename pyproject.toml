@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=61", "wheel", "Cython>=3.0", "numpy>=1.20"]
+# Cap NumPy so manylinux builds install a wheel instead of compiling a
+# source tarball that needs a newer GCC than manylinux2014 provides.
+requires = ["setuptools>=61", "wheel", "Cython>=3.0", "numpy>=1.20,<2.5"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -73,6 +75,9 @@ include = ["sparc*"]
 [tool.cibuildwheel]
 build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_* cp*t-*"
+# manylinux2014 ships GCC 10.2; recent NumPy wheels target 2_28+.
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
 test-command = "python -c \"import sparc; from sparc import CategoricalInputNode, SumNode; print(sparc.__version__)\""
 
 [tool.cibuildwheel.macos]
