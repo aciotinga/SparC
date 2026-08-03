@@ -15,6 +15,8 @@ Documentation: [https://sparc-docs.readthedocs.io](https://sparc-docs.readthedoc
 - **Modularity**: nodes dispatch through a C-level vtable, and all pairwise
   queries share one tape/gradient engine. New leaf types and new queries are
   added without editing existing files.
+- **Differentiable sampling**: exact hard samples with SparC-native SIMPLE
+  vector-Jacobian products for sum and categorical choices.
 - **Minimal deps**: `numpy` only at runtime. Transportation and assignment
   problems are solved by built-in pure-Cython solvers.
 
@@ -88,6 +90,10 @@ point = np.array([0, 1], dtype=np.int32)
 circuit.log_likelihood(point)
 circuit.sample(5, seed=0)  # ndarray (5, max_var+1)
 
+# Hard one-hot samples plus an explicit SIMPLE VJP tape
+draws = circuit.sample(5, seed=0, differentiable=True)
+grads = draws.vjp(np.ones_like(draws.one_hot))
+
 data = np.random.randint(0, 2, size=(1000, 2)).astype(np.int32)
 circuit.compile().log_likelihood(data)
 ```
@@ -122,6 +128,7 @@ sparc/
   nodes.pyx        # CircuitNode / Sum / Product / leaf nodes (+ vtable)
   eval.pyx         # likelihood / sampling + CompiledCircuit
   grad.pyx         # GradBundle + mean_log_likelihood_and_grad
+  sampling.pyx     # hard-forward SIMPLE sampling + explicit VJPs
   metrics.pyx      # GroundMetric, PNormMetric
   solvers/         # transport, assignment, northwest
   queries/         # CW, GCW, expectation, ESD

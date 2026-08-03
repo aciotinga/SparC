@@ -47,6 +47,9 @@ cdef class GradBundle:
 
     Attributes:
         value: Scalar objective value (mean log-likelihood or query value).
+        has_value: Whether ``value`` represents an objective. VJP-only bundles
+            set this to ``False`` because their caller supplies only an
+            upstream gradient, not the originating scalar objective.
         sum_grads: ``SumNode.id`` -> gradient w.r.t. that node's parameters.
         cat_grads: Leaf ``id`` -> gradient w.r.t. leaf probabilities.
 
@@ -56,6 +59,7 @@ cdef class GradBundle:
 
     def __cinit__(self):
         self.value = 0.0
+        self.has_value = True
         self.sum_grads = {}
         self.cat_grads = {}
 

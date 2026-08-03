@@ -32,3 +32,12 @@ def test_refresh_parameters_updates_batched_ll():
         rtol=0,
         atol=1e-10,
     )
+
+
+def test_refresh_rejects_leaf_cardinality_change():
+    leaf = CategoricalInputNode(scope_var=0, probabilities=[0.7, 0.3])
+    compiled = ProductNode(children=[leaf]).compile()
+    leaf.set_probabilities_list([0.2, 0.3, 0.5])
+
+    with pytest.raises(ValueError, match="changed cardinality.*recompile"):
+        compiled.refresh_parameters()

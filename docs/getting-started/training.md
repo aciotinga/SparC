@@ -29,6 +29,17 @@ val, grad = cw_distance_and_grad(p, q)
 apply_grads(q, grad, lr=1e-2, ascent=False)  # minimize w.r.t. q
 ```
 
+The same update path accepts gradients from hard samples:
+
+```python
+draws = q.sample(128, seed=0, differentiable=True)
+upstream = downstream_gradient(draws.one_hot)
+apply_grads(q, draws.vjp(upstream), lr=1e-2)
+```
+
+`vjp()` does not average across samples; include any mean reduction in
+`upstream`. See [Differentiable sampling](../guides/differentiable-sampling.md).
+
 ## API reference
 
 - [`MLETrainer`][sparc.optim.MLETrainer]

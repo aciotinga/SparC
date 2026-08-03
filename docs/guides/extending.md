@@ -20,6 +20,12 @@ the leaf vtable and `node_kind` tags. For the fast path, subclass
 [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode] and implement
 `pmf_at`; then `circuit.compile()` materializes PMFs into flat pools.
 
+Hard-forward differentiable sampling additionally requires finite support and
+a consistent cardinality for every occurrence of a variable. Built-in
+`CategoricalInputNode` and `BernoulliInputNode` leaves receive SIMPLE
+leaf-parameter gradients; custom finite-discrete leaves are sampled as fixed
+distributions unless their gradient support is added to the sampling engine.
+
 ## New ground metric
 
 Subclass [`GroundMetric`][sparc.metrics.GroundMetric] and implement

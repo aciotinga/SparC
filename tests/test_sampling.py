@@ -36,6 +36,26 @@ def test_sample_deterministic_with_seed():
     assert (a == b).all()
 
 
+def test_differentiable_false_is_exact_legacy_path():
+    root = _simple_product_circuit()
+    implicit = sample(root, 20, seed=42)
+    explicit = sample(root, 20, seed=42, differentiable=False)
+    method = root.sample(20, seed=42, differentiable=False)
+    assert isinstance(explicit, np.ndarray)
+    assert explicit.dtype == np.int32
+    assert np.array_equal(implicit, explicit)
+    assert np.array_equal(implicit, method)
+
+
+def test_differentiable_keyword_routes_through_active_backend():
+    root = _weighted_sum_circuit()
+    result = sample(root, 4, seed=42, differentiable=True)
+    assert result.assignments.shape == (4, 1)
+    assert result.one_hot.shape == (4, 2)
+    grads = result.vjp(np.ones_like(result.one_hot))
+    assert int(root.id) in grads.sum_grads
+
+
 def test_sample_differs_across_seeds():
     root = _simple_product_circuit()
     a = sample(root, 50, seed=1)

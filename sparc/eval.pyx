@@ -246,12 +246,20 @@ cdef void _sample_node(CircuitNode node, RandomState rng, int* out) except *:
         raise TypeError(f"unsupported node type for sampling: {type(node).__name__}")
 
 
-cpdef cnp.ndarray sample(CircuitNode root, Py_ssize_t n_samples, object seed=None):
-    """Draw ancestral samples as a 2-D integer array."""
+cpdef object sample(
+    CircuitNode root,
+    Py_ssize_t n_samples,
+    object seed=None,
+    bint differentiable=False,
+):
+    """Draw ancestral samples, optionally retaining a SIMPLE VJP tape."""
     if root.scope.size() == 0:
         root.propagate_scope()
     if n_samples < 0:
         raise ValueError("n_samples must be non-negative")
+    if differentiable:
+        from sparc.sampling import sample_differentiable
+        return sample_differentiable(root, n_samples, seed)
     cdef unsigned long long rng_seed
     if seed is None:
         rng_seed = <unsigned long long>time.time_ns()

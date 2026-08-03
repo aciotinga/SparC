@@ -10,6 +10,7 @@ nav:
       - Training: "getting-started/training.md"
   - Guides:
       - Queries: "guides/queries.md"
+      - Differentiable Sampling: "guides/differentiable-sampling.md"
       - Structures: "guides/structures.md"
       - Builders: "guides/builders.md"
       - Serialization: "guides/serialization.md"

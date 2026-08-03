@@ -1,5 +1,6 @@
 cdef class GradBundle:
     cdef public double value
+    cdef public bint has_value
     cdef public dict sum_grads
     cdef public dict cat_grads
 

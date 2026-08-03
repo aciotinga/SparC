@@ -93,6 +93,7 @@ def test_value_matches_average_log_likelihood():
     mean_ll, grads = mean_log_likelihood_and_grad(root, data)
 
     ref = float(pc.compile().log_likelihood(data).mean())
+    assert grads.has_value
     assert_allclose(mean_ll, ref, rtol=1e-12, atol=1e-12)
     assert_allclose(grads.value, ref, rtol=1e-12, atol=1e-12)
 

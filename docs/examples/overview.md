@@ -16,6 +16,15 @@ circuit by projected gradient ascent.
 PYTHONPATH=. python examples/mle.py
 ```
 
+## differentiable_sampling
+
+Optimize sum and categorical probabilities through exact hard samples using a
+SIMPLE VJP:
+
+```bash
+PYTHONPATH=. python examples/differentiable_sampling.py
+```
+
 ## cw_minimization
 
 Minimize Circuit-Wasserstein distance from a fixed circuit `P` to a learnable

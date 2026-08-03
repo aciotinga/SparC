@@ -44,6 +44,8 @@ circuits written in Cython.
   compiled batched evaluation path.
 - **Modularity**: leaf nodes dispatch through a C-level vtable; all pairwise
   queries share one tape/gradient engine.
+- **Differentiable sampling**: exact hard draws with SIMPLE
+  vector-Jacobian products.
 - **Minimal deps**: `numpy` only at runtime.
 
 See the [handbook](handbook/architecture.md) for internal architecture and the

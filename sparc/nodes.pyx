@@ -209,10 +209,15 @@ cdef class CircuitNode:
         self._ensure_scope()
         return mean_log_likelihood_and_grad(self, dataset, var_to_col)
 
-    def sample(self, n_samples, seed=None):
+    def sample(self, n_samples, seed=None, *, differentiable=False):
         from sparc.eval import sample
         self._ensure_scope()
-        return sample(self, n_samples, seed)
+        return sample(
+            self,
+            n_samples,
+            seed,
+            differentiable=differentiable,
+        )
 
     def compile(self):
         from sparc._graph import CompiledCircuit

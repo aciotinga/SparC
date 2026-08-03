@@ -1,7 +1,8 @@
 """SparC: fast, modular sparse probabilistic circuits in Cython (CPU-only).
 
 SparC implements probabilistic circuits (PCs) with typed Cython evaluation,
-differentiable Wasserstein-type queries, and composable structure builders.
+hard-forward differentiable sampling, differentiable Wasserstein-type
+queries, and composable structure builders.
 Import node types and query functions from this package; see subpackages
 :mod:`sparc.optim`, :mod:`sparc.builders`, :mod:`sparc.structures`, and
 :mod:`sparc.io` for training, random construction, built-in structures, and
@@ -37,6 +38,7 @@ __all__ = [
     "likelihood",
     "log_likelihood",
     "sample",
+    "DifferentiableSample",
     "CompiledCircuit",
     "mean_log_likelihood_and_grad",
     "GradBundle",
@@ -62,6 +64,7 @@ _LAZY_EXPORTS = {
     "likelihood": ("sparc.eval", "likelihood"),
     "log_likelihood": ("sparc.eval", "log_likelihood"),
     "sample": ("sparc.eval", "sample"),
+    "DifferentiableSample": ("sparc.sampling", "DifferentiableSample"),
     "GradBundle": ("sparc.grad", "GradBundle"),
     "mean_log_likelihood_and_grad": ("sparc.grad", "mean_log_likelihood_and_grad"),
     "CircuitSerializer": ("sparc.io", "CircuitSerializer"),

@@ -39,6 +39,7 @@ _pyx_modules = [
     "sparc._graph",
     "sparc.eval",
     "sparc.grad",
+    "sparc.sampling",
     "sparc.metrics",
     "sparc.solvers.northwest",
     "sparc.solvers.transport",

@@ -42,7 +42,14 @@ circuit.log_likelihood(partial)
 ```python
 samples = circuit.sample(5, seed=0)  # shape (5, max_var+1), int32
 # samples[i, var] is the outcome for variable var; -1 where out of scope
+
+# Exact hard samples with a packed one-hot SIMPLE VJP tape
+draws = circuit.sample(5, seed=0, differentiable=True)
+grads = draws.vjp(np.ones_like(draws.one_hot))
 ```
+
+See [Differentiable sampling](../guides/differentiable-sampling.md) for the
+packed layout, gradient semantics, and structural requirements.
 
 ## Save and load
 

@@ -16,6 +16,7 @@ flowchart TB
 
     subgraph objectPath [Object-graph path]
         EvalObj[eval likelihood / sample]
+        SampleObj[sampling SIMPLE tape / VJP]
         GradObj[grad mean_log_likelihood_and_grad]
         CoupleObj[CoupleContext queries]
     end
@@ -23,6 +24,7 @@ flowchart TB
     subgraph flatPath [CompiledCircuit flat path]
         Graph[_graph CompiledCircuit]
         EvalFlat[log_likelihood / likelihood / sample]
+        SampleFlat[sampling compiled SIMPLE tape / VJP]
         GradFlat[compiled_mean_log_likelihood_and_grad]
         QueriesFlat[CW GCW expectation ESD]
     end
@@ -43,6 +45,7 @@ flowchart TB
 | `sparc/node_clone.py` | Deep-copy helpers |
 | `sparc/_graph.pyx` | `CompiledCircuit` flattened layout |
 | `sparc/eval.pyx` | Object-graph likelihood / sampling |
+| `sparc/sampling.pyx` | Hard-forward SIMPLE sampling and explicit VJPs |
 | `sparc/grad.pyx` | `GradBundle`, object + compiled gradients |
 | `sparc/metrics.pyx` | Pluggable ground metrics |
 | `sparc/queries/` | CW, GCW, expectation, ESD |
@@ -59,6 +62,8 @@ flowchart TB
 3. `circuit.compile()` flattens the DAG into `CompiledCircuit` once.
 4. Compiled queries use `nogil` numeric cores over CSR arrays; call `refresh_parameters()` after weight updates.
 5. Gradients accumulate into `GradBundle` dicts keyed by `node.id`.
+6. Differentiable samples retain occurrence-indexed hard choices; their VJP
+   reduces those occurrences into the same `GradBundle` format.
 
 ## Related handbooks
 

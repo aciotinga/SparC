@@ -18,6 +18,7 @@ EXTENSION_MODULES = (
     "sparc.nodes",
     "sparc.eval",
     "sparc.grad",
+    "sparc.sampling",
     "sparc.metrics",
     "sparc.queries.cw",
     "sparc.queries.gcw",

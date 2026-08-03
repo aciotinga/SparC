@@ -753,6 +753,17 @@ cdef class CompiledCircuit:
 
     def refresh_parameters(self):
         """Re-copy sum weights and leaf PMFs from live nodes after an update."""
+        cdef size_t n
+        cdef FiniteDiscreteInputNode leaf
+        for n in range(self.n_nodes):
+            if self.kinds[n] != NODE_INPUT:
+                continue
+            leaf = <FiniteDiscreteInputNode>self.node_objs[n]
+            if leaf.support_size() != <size_t>self.leaf_card[n]:
+                raise ValueError(
+                    f"leaf node {self.node_ids[n]} changed cardinality; "
+                    "recompile the circuit"
+                )
         self._refresh_sum_weights()
         self._refresh_leaf_pmfs()
 
@@ -806,6 +817,11 @@ cdef class CompiledCircuit:
             if self.kinds[n] != NODE_INPUT:
                 continue
             leaf = <FiniteDiscreteInputNode>self.node_objs[n]
+            if leaf.support_size() != <size_t>self.leaf_card[n]:
+                raise ValueError(
+                    f"leaf node {self.node_ids[n]} changed cardinality; "
+                    "recompile the circuit"
+                )
             lbase = self.leaf_pmf_off[n]
             for k in range(<size_t>self.leaf_card[n]):
                 pmf = leaf.pmf_at(k)
@@ -869,10 +885,19 @@ cdef class CompiledCircuit:
                 self, data, leaf_col, n_rows, log_space, val_view, out
             )
 
-    def sample(self, Py_ssize_t n_samples, object seed=None):
-        """Draw samples as a 2-D integer array of shape ``(n_samples, max_var+1)``."""
+    def sample(
+        self,
+        Py_ssize_t n_samples,
+        object seed=None,
+        *,
+        bint differentiable=False,
+    ):
+        """Draw samples, optionally retaining a SIMPLE VJP tape."""
         if n_samples < 0:
             raise ValueError("n_samples must be non-negative")
+        if differentiable:
+            from sparc.sampling import sample_compiled_differentiable
+            return sample_compiled_differentiable(self, n_samples, seed)
         cdef unsigned long long rng_seed
         if seed is None:
             rng_seed = <unsigned long long>time.time_ns()

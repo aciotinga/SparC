@@ -22,6 +22,10 @@ After parameter updates (e.g. MLE steps), refresh flat pools without rebuilding 
 compiled.refresh_parameters()
 ```
 
+Changing a leaf's cardinality changes flat offsets and therefore requires a
+new `circuit.compile()`; `refresh_parameters()` raises instead of refreshing
+an incompatible snapshot.
+
 ## Requirements
 
 - All leaves must be [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode] (any subclass; PMFs materialized via `pmf_at` at compile time).
@@ -42,6 +46,17 @@ The flattened representation stores:
 - `sum_w_flat`, `sum_logw_flat`: mixture weights for sum nodes
 - `leaf_var`, `leaf_card`, `leaf_pmf_flat`, `leaf_logpmf_flat`: leaf metadata and PMFs
 - `node_ids`, `scope_sig`: gradient keys and product-child matching
+
+## Differentiable sampling
+
+`compiled.sample(n, differentiable=True)` reads the flat parameter snapshot
+and returns a [`DifferentiableSample`][sparc.sampling.DifferentiableSample].
+Its hard assignments and SIMPLE tape are frozen, so a later parameter refresh
+does not change a retained VJP. The differentiable path retains Python-visible
+tape state and does not use the ordinary one-path `nogil` sampling loop.
+
+See [Differentiable sampling](../guides/differentiable-sampling.md) for the
+packed one-hot layout and structural requirements.
 
 ## Batched evaluation
 
