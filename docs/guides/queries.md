@@ -15,7 +15,11 @@ decompositions at sum and product nodes, and compatible leaf cardinalities.
 | ESD | $E[d(X,X')^p]$ for two i.i.d. draws | single circuit |
 
 The CW value is the **additive** $W_p^p$ objective; take the $p$-th root for
-the distance itself.
+the distance itself. Discrete CW uses the northwest-corner plan at leaves.
+**Continuous circuits support Euclidean $W_2$ only** (`PNormMetric` with $p=2$);
+leaf cost is $((\mu_1-\mu_2)^2+(\sigma_1-\sigma_2)^2)/\mathrm{scale}$.
+
+GCW is **discrete-only**: a continuous operand raises `ValueError`.
 
 ## Circuit-Wasserstein (CW)
 

@@ -54,6 +54,7 @@ circuit = load_learned_pc(
 | `literal` | `scope`, `value` |
 | `indicator` | `scope`, `value`, `num_cats` |
 | `discrete_logistic` | `scope`, `mu`, `s`, `num_cats` |
+| `gaussian` | `scope`, `mean`, `std` |
 | `sum` | `params`, `children` |
 | `product` | `children` |
 

@@ -68,6 +68,12 @@ Nodes appear in post-order (children before parents). Each record has:
 {"id": 0, "kind": "discrete_logistic", "children": [], "scope": [0], "mu": 0.0, "s": 1.0, "num_cats": 8}
 ```
 
+**gaussian**
+
+```json
+{"id": 0, "kind": "gaussian", "children": [], "scope": [0], "mean": 0.0, "std": 1.0}
+```
+
 ## DAG sharing
 
 If two parents reference the same child object in memory, the serializer emits

@@ -20,6 +20,8 @@ from sparc.metrics cimport GroundMetric, PNormMetric
 from sparc.nodes cimport (
     CategoricalInputNode,
     CircuitNode,
+    ContinuousInputNode,
+    DOMAIN_CONTINUOUS,
     FiniteDiscreteInputNode,
     NODE_INPUT,
     NODE_PRODUCT,
@@ -31,6 +33,7 @@ from sparc.nodes cimport (
 
 cdef class _ESDContext:
     cdef GroundMetric metric
+    cdef double cont_scale
     cdef unordered_map[size_t, vector[double]] dist_cache
     cdef unordered_map[size_t, double] mu_cache
     cdef unordered_map[size_t, double] nu_cache
@@ -39,11 +42,14 @@ cdef class _ESDContext:
     cdef unordered_map[size_t, double] bar_nu
     cdef dict sum_grads
     cdef dict cat_grads
+    cdef dict cont_grads
 
     def __cinit__(self):
         self.order = []
         self.sum_grads = {}
         self.cat_grads = {}
+        self.cont_grads = {}
+        self.cont_scale = 1.0
 
     cdef vector[double]* _dist(self, FiniteDiscreteInputNode node, size_t n) except *:
         cdef size_t key = node.id
@@ -77,17 +83,21 @@ cdef class _ESDContext:
         cdef double child_nu
 
         if node.node_kind == NODE_INPUT:
-            leaf = <FiniteDiscreteInputNode>node
-            n_out = leaf.support_size()
-            d_ptr = self._dist(leaf, n_out)
-            for a in range(n_out):
-                pa = leaf.pmf_at(a)
-                for b in range(n_out):
-                    d_ab = deref(d_ptr)[a * n_out + b]
-                    total_mu += pa * d_ab * leaf.pmf_at(b)
-                    total_nu += pa * d_ab * d_ab * leaf.pmf_at(b)
-            mu = total_mu
-            nu = total_nu
+            if node.circuit_domain == DOMAIN_CONTINUOUS:
+                mu = (<ContinuousInputNode>node).esd_c(self.cont_scale)
+                nu = mu
+            else:
+                leaf = <FiniteDiscreteInputNode>node
+                n_out = leaf.support_size()
+                d_ptr = self._dist(leaf, n_out)
+                for a in range(n_out):
+                    pa = leaf.pmf_at(a)
+                    for b in range(n_out):
+                        d_ab = deref(d_ptr)[a * n_out + b]
+                        total_mu += pa * d_ab * leaf.pmf_at(b)
+                        total_nu += pa * d_ab * d_ab * leaf.pmf_at(b)
+                mu = total_mu
+                nu = total_nu
         elif node.node_kind == NODE_SUM:
             s = <SumNode>node
             nc = s.num_children()
@@ -139,6 +149,9 @@ cdef class _ESDContext:
         cdef double theta_i
         cdef double mu_node
         cdef FiniteDiscreteInputNode leaf
+        cdef ContinuousInputNode cont
+        cdef size_t np
+        cdef vector[double] gbuf
         cdef SumNode s
         cdef ProductNode prod
 
@@ -151,6 +164,15 @@ cdef class _ESDContext:
                 continue
 
             if node.node_kind == NODE_INPUT:
+                if node.circuit_domain == DOMAIN_CONTINUOUS:
+                    cont = <ContinuousInputNode>node
+                    np = cont.n_params()
+                    gbuf.resize(np)
+                    cont.esd_backward_c(self.cont_scale, adj_nu + adj_mu, gbuf.data())
+                    arr = grad_arr(self.cont_grads, nid, np)
+                    for kk in range(np):
+                        arr[kk] += gbuf[kk]
+                    continue
                 leaf = <FiniteDiscreteInputNode>node
                 n_out = leaf.support_size()
                 d_ptr = self._dist(leaf, n_out)
@@ -193,21 +215,48 @@ cdef class _ESDContext:
                     self.bar_nu[cid] = self.bar_nu[cid] + adj_nu
 
     cdef double solve(self, CircuitNode root) except *:
+        cdef double mu
         cdef double nu
-        _, nu = self._forward(root)
+        mu, nu = self._forward(root)
+        if root.circuit_domain == DOMAIN_CONTINUOUS:
+            return mu
         return nu
 
     cdef tuple solve_with_grad(self, CircuitNode root):
         cdef double value
+        cdef double mu
+        cdef double nu
         cdef GradBundle grads
-        _, value = self._forward(root)
-        self.bar_nu[root.id] = 1.0
+        mu, nu = self._forward(root)
+        if root.circuit_domain == DOMAIN_CONTINUOUS:
+            value = mu
+            self.bar_mu[root.id] = 1.0
+        else:
+            value = nu
+            self.bar_nu[root.id] = 1.0
         self._backward()
         grads = GradBundle()
         grads.value = value
         grads.sum_grads = self.sum_grads
         grads.cat_grads = self.cat_grads
+        grads.cont_grads = self.cont_grads
         return (value, grads)
+
+
+cdef CircuitNode _compiled_root(CompiledCircuit g):
+    return <CircuitNode>g.node_objs[g.root_index]
+
+
+cdef double _esd_cont_scale(CircuitNode root, GroundMetric m) except *:
+    cdef PNormMetric pn
+    if root.circuit_domain != DOMAIN_CONTINUOUS:
+        return 1.0
+    if not isinstance(m, PNormMetric):
+        raise ValueError("continuous ESD requires a PNormMetric with p=2")
+    pn = <PNormMetric>m
+    if pn.p != 2.0:
+        raise ValueError("continuous ESD only supports p-norm W_2")
+    return pn.scale
 
 
 cdef CircuitNode _unwrap(object circuit):
@@ -487,10 +536,17 @@ cpdef double expected_squared_distance(
     cdef _ESDContext ctx
     m = metric if metric is not None else PNormMetric(metric_p, scale_factor)
     if isinstance(circuit, CompiledCircuit):
+        if (<CompiledCircuit>circuit).circuit_domain == DOMAIN_CONTINUOUS:
+            root = _compiled_root(circuit)
+            ctx = _ESDContext()
+            ctx.metric = m
+            ctx.cont_scale = _esd_cont_scale(root, m)
+            return ctx.solve(root)
         return _flat_esd_solve(circuit, m)
     root = _unwrap(circuit)
     ctx = _ESDContext()
     ctx.metric = m
+    ctx.cont_scale = _esd_cont_scale(root, m)
     return ctx.solve(root)
 
 
@@ -516,8 +572,15 @@ cpdef tuple expected_squared_distance_and_grad(
     cdef _ESDContext ctx
     m = metric if metric is not None else PNormMetric(metric_p, scale_factor)
     if isinstance(circuit, CompiledCircuit):
+        if (<CompiledCircuit>circuit).circuit_domain == DOMAIN_CONTINUOUS:
+            root = _compiled_root(circuit)
+            ctx = _ESDContext()
+            ctx.metric = m
+            ctx.cont_scale = _esd_cont_scale(root, m)
+            return ctx.solve_with_grad(root)
         return _flat_esd_solve_with_grad(circuit, m)
     root = _unwrap(circuit)
     ctx = _ESDContext()
     ctx.metric = m
+    ctx.cont_scale = _esd_cont_scale(root, m)
     return ctx.solve_with_grad(root)

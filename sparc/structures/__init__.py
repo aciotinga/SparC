@@ -18,6 +18,7 @@ from sparc.structures.distributions import (
     Bernoulli,
     Categorical,
     DiscreteLogistic,
+    Gaussian,
     Indicator,
     InputDistribution,
     Literal,
@@ -40,4 +41,5 @@ __all__ = [
     "Indicator",
     "Literal",
     "DiscreteLogistic",
+    "Gaussian",
 ]

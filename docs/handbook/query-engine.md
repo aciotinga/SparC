@@ -22,7 +22,8 @@ Two keying schemes are used deliberately:
 | Returned gradients | `node.id` | Match grads to user-visible nodes |
 
 The engine appends tape entries during forward evaluation when `recording=True`,
-then replays them in reverse to populate `sum_grads*` and `cat_grads*` arrays.
+then replays them in reverse to populate `sum_grads*` / `cat_grads*` /
+`cont_grads*` arrays.
 
 ## Product-child matching
 
@@ -45,8 +46,12 @@ project onto simplices for probability parameters.
 
 | Module | Leaf coupling | Sum-sum coupling | Product-product |
 |--------|---------------|------------------|-----------------|
-| `cw.pyx` | NW plan | Transport LP + duals | Scope-matched product |
-| `gcw.pyx` | NW + cross costs | Transport + assignment | Hungarian matching |
-| `expectation.pyx` | PMF product | Weighted child recursion | Scope-matched product |
+| `cw.pyx` | Discrete: NW plan. Continuous: closed-form Euclidean $W_2^2$ | Transport LP + duals | Scope-matched product (additive $W_2^2$) |
+| `gcw.pyx` | NW + cross costs (**discrete only**; continuous circuits raise) | Transport + assignment | Hungarian matching |
+| `expectation.pyx` | Discrete: PMF product. Continuous: $\int p q$ | Weighted child recursion | Scope-matched product |
+| `esd.pyx` | Discrete: $E[d^p]$. Continuous: $2\sigma^2/\mathrm{scale}$ | Mixture | Additive over factors |
+
+A circuit is all-discrete or all-continuous. Continuous CW/ESD require a
+[`PNormMetric`][sparc.metrics.PNormMetric] with $p=2$.
 
 See [Solvers](solvers.md) for the underlying OT and assignment routines.

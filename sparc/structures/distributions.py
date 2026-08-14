@@ -124,6 +124,29 @@ class DiscreteLogistic(InputDistribution):
         return factory.discrete_logistic(scope_var, mu, s, self.num_cats)
 
 
+class Gaussian(InputDistribution):
+    """Univariate Gaussian leaf. ``mu`` / ``sigma`` default to random values."""
+
+    def __init__(
+        self,
+        mu: Optional[float] = None,
+        sigma: Optional[float] = None,
+    ):
+        if sigma is not None and sigma <= 0:
+            raise ValueError("sigma must be positive")
+        self.mu = mu
+        self.sigma = sigma
+
+    def create(self, factory: _NodeFactory, scope_var: int):
+        mu = self.mu if self.mu is not None else float(np.random.normal())
+        sigma = (
+            self.sigma
+            if self.sigma is not None
+            else float(np.random.uniform(0.5, 2.0))
+        )
+        return factory.gaussian(scope_var, mu, sigma)
+
+
 def resolve_input_distribution(
     input_dist: Optional[InputDistribution], num_cats: int
 ) -> InputDistribution:

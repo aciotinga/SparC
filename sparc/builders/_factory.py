@@ -10,6 +10,7 @@ from sparc.nodes import (
     BernoulliInputNode,
     CategoricalInputNode,
     DiscreteLogisticInputNode,
+    GaussianInputNode,
     IndicatorInputNode,
     LiteralInputNode,
     ProductNode,
@@ -48,6 +49,11 @@ class _NodeFactory:
         return DiscreteLogisticInputNode(
             int(scope_var), float(mu), float(s), int(num_cats)
         )
+
+    def gaussian(
+        self, scope_var: int, mu: float, sigma: float
+    ) -> GaussianInputNode:
+        return GaussianInputNode(int(scope_var), float(mu), float(sigma))
 
     def product(self, children: Iterable) -> ProductNode:
         return ProductNode(list(children))

@@ -15,11 +15,13 @@ from sparc.nodes import (
     BernoulliInputNode,
     CategoricalInputNode,
     CircuitNode,
+    ContinuousInputNode,
     ProductNode,
     SumNode,
 )
 
 PROB_FLOOR = 1e-20
+SIGMA_FLOOR = 1e-12
 
 GradLike = Union["object", Dict]  # GradBundle or a mapping
 
@@ -99,8 +101,11 @@ def simplex_step(
 def _grad_dicts(grads: GradLike):
     """Accept a GradBundle or a ``(sum_grads, cat_grads)`` pair / mapping."""
     if hasattr(grads, "sum_grads") and hasattr(grads, "cat_grads"):
-        return grads.sum_grads, grads.cat_grads
+        cont = getattr(grads, "cont_grads", None) or {}
+        return grads.sum_grads, grads.cat_grads, cont
     if isinstance(grads, tuple) and len(grads) == 2:
+        return grads[0], grads[1], {}
+    if isinstance(grads, tuple) and len(grads) == 3:
         return grads
     raise TypeError("grads must be a GradBundle or a (sum_grads, cat_grads) tuple")
 
@@ -114,9 +119,10 @@ def apply_grads(
     method: str = "tangent",
     prob_floor: float = PROB_FLOOR,
 ) -> None:
-    """Apply one :func:`simplex_step` to every sum / categorical node in place.
+    """Apply one parameter step to every node whose ``id`` is in ``grads``.
 
-    Only nodes whose ``id`` appears in the gradient dicts are updated.
+    Probability parameters use :func:`simplex_step`. Gaussian ``μ`` is
+    unconstrained; ``σ`` is clipped to a positive floor.
 
     Args:
         circuit: Root :class:`~sparc.nodes.CircuitNode`.
@@ -127,7 +133,8 @@ def apply_grads(
         prob_floor: Minimum probability per entry after projection.
     """
     root = circuit
-    sum_grads, cat_grads = _grad_dicts(grads)
+    sum_grads, cat_grads, cont_grads = _grad_dicts(grads)
+    sign = 1.0 if ascent else -1.0
     for node in iter_nodes(root):
         nid = int(node.id)
         if isinstance(node, SumNode) and nid in sum_grads:
@@ -147,13 +154,24 @@ def apply_grads(
                     ascent=ascent, method=method, prob_floor=prob_floor,
                 )
             )
+        elif isinstance(node, ContinuousInputNode) and nid in cont_grads:
+            params = np.asarray(node.parameters_list(), dtype=np.float64)
+            g = np.asarray(cont_grads[nid], dtype=np.float64)
+            if g.shape != params.shape:
+                raise ValueError(
+                    f"cont_grads[{nid}] has shape {g.shape}, expected {params.shape}"
+                )
+            params = params + sign * lr * g
+            if params.size >= 2:
+                params[1] = max(SIGMA_FLOOR, float(params[1]))
+            node.set_params_list(params.tolist())
 
 
 def global_grad_norm(grads: GradLike) -> float:
-    """L2 norm over all sum and categorical gradient entries."""
-    sum_grads, cat_grads = _grad_dicts(grads)
+    """L2 norm over all sum, categorical, and continuous gradient entries."""
+    sum_grads, cat_grads, cont_grads = _grad_dicts(grads)
     sq = 0.0
-    for d in (sum_grads, cat_grads):
+    for d in (sum_grads, cat_grads, cont_grads):
         for v in d.values():
             a = np.asarray(v, dtype=np.float64)
             sq += float(a @ a)
@@ -222,7 +240,12 @@ class MLETrainer:
         Returns:
             List of mean log-likelihoods recorded before each step.
         """
-        data = np.ascontiguousarray(dataset, dtype=np.int32)
+        dtype = (
+            np.float64
+            if self.circuit.circuit_domain == 2
+            else np.int32
+        )
+        data = np.ascontiguousarray(dataset, dtype=dtype)
         history: List[float] = []
         for epoch in range(epochs):
             mean_ll = self.step(data)

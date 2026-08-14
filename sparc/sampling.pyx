@@ -19,7 +19,9 @@ from sparc._graph cimport (
     CompiledCircuit,
     LEAF_BERNOULLI,
     LEAF_CATEGORICAL,
+    LEAF_GAUSSIAN,
     _flat_sample_node,
+    _max_var_from_scope,
 )
 from sparc.eval cimport _sample_node
 from sparc.grad cimport GradBundle, grad_arr
@@ -28,6 +30,7 @@ from sparc.nodes cimport (
     CategoricalInputNode,
     CircuitNode,
     FiniteDiscreteInputNode,
+    GaussianInputNode,
     InternalNode,
     NODE_INPUT,
     NODE_PRODUCT,
@@ -41,6 +44,7 @@ from sparc.nodes cimport (
 cdef double PROB_TOL = 1e-6
 cdef int TRACE_LEAF = 0
 cdef int TRACE_SUM = 1
+cdef int TRACE_CONT_LEAF = 2
 
 
 cdef class DifferentiableSample:
@@ -64,6 +68,7 @@ cdef class DifferentiableSample:
     cdef object _events
     cdef Py_ssize_t _n_samples
     cdef Py_ssize_t _packed_width
+    cdef bint _continuous
 
     def __init__(self, *args, **kwargs):
         raise TypeError(
@@ -79,6 +84,7 @@ cdef class DifferentiableSample:
         object cardinalities,
         object offsets,
         object events,
+        bint continuous=False,
     ) except *:
         self.assignments = assignments
         self.one_hot = one_hot
@@ -88,6 +94,7 @@ cdef class DifferentiableSample:
         self._events = events
         self._n_samples = assignments.shape[0]
         self._packed_width = one_hot.shape[1]
+        self._continuous = continuous
         assignments.setflags(write=False)
         one_hot.setflags(write=False)
         variables.setflags(write=False)
@@ -102,6 +109,8 @@ cdef class DifferentiableSample:
         implicit averaging is applied.
         """
         cdef cnp.ndarray arr = np.asarray(upstream, dtype=np.float64, order="C")
+        if self._continuous:
+            return self._vjp_continuous(arr)
         if (
             arr.ndim != 2
             or arr.shape[0] != self._n_samples
@@ -166,6 +175,47 @@ cdef class DifferentiableSample:
         grads.has_value = False
         grads.sum_grads = sum_grads
         grads.cat_grads = cat_grads
+        grads.cont_grads = {}
+        return grads
+
+    cdef object _vjp_continuous(self, cnp.ndarray arr):
+        cdef Py_ssize_t width = self.assignments.shape[1]
+        if (
+            arr.ndim != 2
+            or arr.shape[0] != self._n_samples
+            or arr.shape[1] != width
+        ):
+            raise ValueError(
+                "upstream must have shape "
+                f"({self._n_samples}, {width}), "
+                f"got {(<object>arr).shape}"
+            )
+        cdef const double[:, ::1] up = arr
+        cdef dict cont_grads = {}
+        cdef object event
+        cdef object out_arr
+        cdef double[::1] out_view
+        cdef Py_ssize_t row
+        cdef int var
+        cdef double eps
+        cdef object node_id
+        for event in self._events:
+            if event[0] != TRACE_CONT_LEAF:
+                continue
+            row = event[1]
+            node_id = event[2]
+            var = event[3]
+            eps = event[4]
+            out_arr = grad_arr(cont_grads, node_id, 2)
+            out_view = out_arr
+            out_view[0] += up[row, var]
+            out_view[1] += up[row, var] * eps
+        cdef GradBundle grads = GradBundle()
+        grads.value = float("nan")
+        grads.has_value = False
+        grads.sum_grads = {}
+        grads.cat_grads = {}
+        grads.cont_grads = cont_grads
         return grads
 
     def __repr__(self):
@@ -873,3 +923,179 @@ def sample_compiled_differentiable(
         packed_width,
         events,
     )
+
+
+cdef void _sample_object_diff_cont(
+    CircuitNode node,
+    RandomState rng,
+    double* out,
+    Py_ssize_t row,
+    list events,
+) except *:
+    cdef GaussianInputNode g
+    cdef ProductNode p
+    cdef SumNode s
+    cdef size_t i
+    cdef size_t idx
+    cdef size_t n
+    cdef double u
+    cdef double cum
+    cdef double eps
+    cdef int var
+    if node.node_kind == NODE_INPUT:
+        g = <GaussianInputNode>node
+        var = g.scope_var_c()
+        eps = rng.next_normal()
+        out[var] = g.mu + g.sigma * eps
+        events.append((TRACE_CONT_LEAF, row, int(node.id), var, eps))
+        return
+    if node.node_kind == NODE_PRODUCT:
+        p = <ProductNode>node
+        n = p.num_children()
+        for i in range(n):
+            _sample_object_diff_cont(p.child_at(i), rng, out, row, events)
+        return
+    s = <SumNode>node
+    n = s.num_children()
+    u = rng.next_double()
+    cum = 0.0
+    idx = n - 1
+    for i in range(n):
+        cum += s.parameter_at(i)
+        if u < cum:
+            idx = i
+            break
+    _sample_object_diff_cont(s.child_at(idx), rng, out, row, events)
+
+
+cdef void _sample_flat_diff_cont(
+    CompiledCircuit graph,
+    size_t n,
+    RandomState rng,
+    double* out,
+    Py_ssize_t row,
+    list events,
+) except *:
+    cdef int kind = graph.kinds[n]
+    cdef size_t start
+    cdef size_t stop
+    cdef size_t k
+    cdef size_t idx
+    cdef size_t pbase
+    cdef double u
+    cdef double cum
+    cdef double eps
+    cdef double mu
+    cdef double sigma
+    cdef int var
+    if kind == NODE_INPUT:
+        var = graph.leaf_var[n]
+        pbase = graph.leaf_param_off[n]
+        mu = graph.leaf_param_flat[pbase]
+        sigma = graph.leaf_param_flat[pbase + 1]
+        eps = rng.next_normal()
+        out[var] = mu + sigma * eps
+        events.append(
+            (TRACE_CONT_LEAF, row, int(graph.node_ids[n]), var, eps)
+        )
+        return
+    start = graph.child_off[n]
+    stop = graph.child_off[n + 1]
+    if kind == NODE_PRODUCT:
+        for k in range(start, stop):
+            _sample_flat_diff_cont(
+                graph, graph.children_flat[k], rng, out, row, events
+            )
+        return
+    u = rng.next_double()
+    cum = 0.0
+    idx = graph.children_flat[stop - 1]
+    for k in range(start, stop):
+        cum += graph.sum_w_flat[k]
+        if u < cum:
+            idx = graph.children_flat[k]
+            break
+    _sample_flat_diff_cont(graph, idx, rng, out, row, events)
+
+
+cdef object _materialize_continuous_result(
+    object assignments, object events
+):
+    cdef object variables = np.arange(assignments.shape[1], dtype=np.int32)
+    cdef object cardinalities = np.zeros(assignments.shape[1], dtype=np.int32)
+    cdef object offsets = np.zeros(1, dtype=np.intp)
+    cdef object one_hot = np.zeros(
+        (assignments.shape[0], 0), dtype=np.float64
+    )
+    cdef DifferentiableSample result = DifferentiableSample.__new__(
+        DifferentiableSample
+    )
+    result._initialize(
+        assignments,
+        one_hot,
+        variables,
+        cardinalities,
+        offsets,
+        events,
+        True,
+    )
+    return result
+
+
+def sample_differentiable_continuous(
+    CircuitNode root,
+    Py_ssize_t n_samples,
+    object seed=None,
+):
+    """Draw reparameterized Gaussian samples and retain a VJP tape over (μ, σ)."""
+    if n_samples < 0:
+        raise ValueError("n_samples must be non-negative")
+    if root.scope.size() == 0:
+        root.propagate_scope()
+    cdef int max_var = _max_var_from_scope(root.scope)
+    cdef size_t width = <size_t>(max_var + 1)
+    cdef object assignments = np.full(
+        (n_samples, width), np.nan, dtype=np.float64
+    )
+    cdef double[:, ::1] assignment_view = assignments
+    cdef unsigned long long rng_seed
+    cdef Py_ssize_t row
+    cdef list events = []
+    if seed is None:
+        rng_seed = <unsigned long long>time.time_ns()
+    else:
+        rng_seed = <unsigned long long>int(seed)
+    cdef RandomState rng = RandomState(rng_seed)
+    for row in range(n_samples):
+        _sample_object_diff_cont(
+            root, rng, &assignment_view[row, 0], row, events
+        )
+    return _materialize_continuous_result(assignments, events)
+
+
+def sample_compiled_differentiable_continuous(
+    CompiledCircuit graph,
+    Py_ssize_t n_samples,
+    object seed=None,
+):
+    """Reparameterized differentiable samples from a compiled Gaussian circuit."""
+    if n_samples < 0:
+        raise ValueError("n_samples must be non-negative")
+    cdef size_t width = <size_t>(graph.max_var + 1)
+    cdef object assignments = np.full(
+        (n_samples, width), np.nan, dtype=np.float64
+    )
+    cdef double[:, ::1] assignment_view = assignments
+    cdef unsigned long long rng_seed
+    cdef Py_ssize_t row
+    cdef list events = []
+    if seed is None:
+        rng_seed = <unsigned long long>time.time_ns()
+    else:
+        rng_seed = <unsigned long long>int(seed)
+    cdef RandomState rng = RandomState(rng_seed)
+    for row in range(n_samples):
+        _sample_flat_diff_cont(
+            graph, graph.root_index, rng, &assignment_view[row, 0], row, events
+        )
+    return _materialize_continuous_result(assignments, events)

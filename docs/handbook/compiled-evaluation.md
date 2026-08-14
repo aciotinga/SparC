@@ -28,8 +28,13 @@ an incompatible snapshot.
 
 ## Requirements
 
-- All leaves must be [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode] (any subclass; PMFs materialized via `pmf_at` at compile time).
-- Non-discrete custom `InputNode` subclasses remain object-graph-only on the root `CircuitNode`.
+- Discrete circuits: all leaves must be [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode]
+  (any subclass; PMFs materialized via `pmf_at` at compile time).
+- Continuous circuits: univariate [`GaussianInputNode`][sparc.nodes.GaussianInputNode]
+  leaves; parameters live in `leaf_param_flat` (`[μ, σ]` per leaf). Evidence is
+  `float64` with `NaN` marking missing variables.
+- Do not mix discrete and continuous leaves in one DAG.
+- Non-Gaussian custom `InputNode` subclasses remain object-graph-only on the root `CircuitNode`.
 
 ## Pairwise queries
 
@@ -44,7 +49,8 @@ The flattened representation stores:
 - `kinds`: per-node type tag (input / product / sum)
 - `child_off`, `children_flat`: CSR child indices
 - `sum_w_flat`, `sum_logw_flat`: mixture weights for sum nodes
-- `leaf_var`, `leaf_card`, `leaf_pmf_flat`, `leaf_logpmf_flat`: leaf metadata and PMFs
+- `leaf_var`, `leaf_card`, `leaf_pmf_flat`, `leaf_logpmf_flat`: discrete leaf metadata and PMFs
+- `leaf_param_off`, `leaf_param_flat`, `leaf_n_param`: continuous leaf parameters
 - `node_ids`, `scope_sig`: gradient keys and product-child matching
 
 ## Differentiable sampling
@@ -72,4 +78,4 @@ compiler can auto-vectorize across the sample axis. The public API is unchanged
 |--------|-------|
 | `circuit.batched_log_likelihood(data)` | `circuit.compile().log_likelihood(data)` |
 | Dict evidence `{var: value}` | 1D `np.ndarray` (index = variable id); 2D batches for vectorized eval |
-| `sample()` returned list of dicts | `sample()` returns `(n, max_var+1)` int32 ndarray |
+| `sample()` returned list of dicts | `sample()` returns `(n, max_var+1)` int32 (discrete) or float64 (continuous) ndarray |

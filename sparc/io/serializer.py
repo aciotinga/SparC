@@ -15,6 +15,7 @@ from sparc.nodes import (
     CategoricalInputNode,
     CircuitNode,
     DiscreteLogisticInputNode,
+    GaussianInputNode,
     IndicatorInputNode,
     LiteralInputNode,
     ProductNode,
@@ -47,6 +48,8 @@ def _node_kind(node: CircuitNode) -> str:
         return "indicator"
     if isinstance(node, DiscreteLogisticInputNode):
         return "discrete_logistic"
+    if isinstance(node, GaussianInputNode):
+        return "gaussian"
     if isinstance(node, SumNode):
         return "sum"
     if isinstance(node, ProductNode):
@@ -97,6 +100,10 @@ def _build_record(node: CircuitNode, node_id: int, pyid_to_idx: Dict[int, int]) 
         rec["mu"] = float(node.mu_value())
         rec["s"] = float(node.s_value())
         rec["num_cats"] = int(node.num_categories())
+    elif kind == "gaussian":
+        rec["scope"] = node.scope_as_list()
+        rec["mean"] = float(node.mu_value())
+        rec["std"] = float(node.sigma_value())
     return rec
 
 
@@ -181,8 +188,6 @@ class CircuitSerializer:
         for nid in range(max_id + 1):
             rec = by_id[nid]
             kind = rec["kind"]
-            if kind == "gaussian":
-                raise ValueError("Gaussian input nodes are not supported in SparC")
             child_ids = [int(x) for x in rec["children"]]
             for cid in child_ids:
                 if cid >= nid:
@@ -231,6 +236,16 @@ class CircuitSerializer:
                     float(rec["mu"]),
                     float(rec["s"]),
                     int(rec["num_cats"]),
+                    id=nid,
+                )
+            elif kind == "gaussian":
+                scope = [int(x) for x in rec["scope"]]
+                if len(scope) != 1:
+                    raise ValueError(f"gaussian leaf requires a single-variable scope; got {scope!r}")
+                built[nid] = GaussianInputNode(
+                    scope[0],
+                    float(rec["mean"]),
+                    float(rec["std"]),
                     id=nid,
                 )
             else:

@@ -40,8 +40,10 @@ cdef class CoupleContext:
         self.tape = []
         self.sum_grads0 = {}
         self.cat_grads0 = {}
+        self.cont_grads0 = {}
         self.sum_grads1 = {}
         self.cat_grads1 = {}
+        self.cont_grads1 = {}
 
     cdef bint memo_get(self, CircuitNode P, CircuitNode Q, double* out) noexcept:
         cdef unordered_map[uint64_t, double].iterator it = self.couple_memo.find(
@@ -86,6 +88,15 @@ cdef class CoupleContext:
             store[key] = arr
         return arr
 
+    cdef object cont_grad_arr(self, int side, CircuitNode node, size_t n):
+        cdef dict store = self.cont_grads0 if side == 0 else self.cont_grads1
+        cdef object key = node.id
+        cdef object arr = store.get(key)
+        if arr is None:
+            arr = np.zeros(n, dtype=np.float64)
+            store[key] = arr
+        return arr
+
     cdef void run_backward(self) except *:
         cdef ssize_t k
         cdef double g
@@ -101,11 +112,12 @@ cdef class CoupleContext:
         self.couple_memo.clear()
         self.tape = []
         self.tape_adjoints.clear()
-        self.pair_to_tape.clear()
         self.sum_grads0 = {}
         self.cat_grads0 = {}
+        self.cont_grads0 = {}
         self.sum_grads1 = {}
         self.cat_grads1 = {}
+        self.cont_grads1 = {}
 
 
 cdef inline uint64_t _scope_sig(CircuitNode node) noexcept:

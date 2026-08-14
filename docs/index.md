@@ -42,8 +42,8 @@ circuits written in Cython.
 
 - **Speed**: typed Cython with C++17 containers, `nogil` inner loops, and a
   compiled batched evaluation path.
-- **Modularity**: leaf nodes dispatch through a C-level vtable; all pairwise
-  queries share one tape/gradient engine.
+- **Modularity**: leaf nodes dispatch through a C-level vtable (discrete or
+  univariate Gaussian); all pairwise queries share one tape/gradient engine.
 - **Differentiable sampling**: exact hard draws with SIMPLE
   vector-Jacobian products.
 - **Minimal deps**: `numpy` only at runtime.

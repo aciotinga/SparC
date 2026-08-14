@@ -15,11 +15,14 @@ from libcpp.vector cimport vector
 
 import numpy as np
 
-from sparc._graph cimport CompiledCircuit, match_prod_children_flat
+from sparc._continuous cimport gaussian_w2sq, gaussian_w2sq_grad
+from sparc._graph cimport CompiledCircuit, LEAF_GAUSSIAN, match_prod_children_flat
 from sparc.grad cimport GradBundle
 from sparc.metrics cimport GroundMetric, PNormMetric
 from sparc.nodes cimport (
     CircuitNode,
+    ContinuousInputNode,
+    DOMAIN_CONTINUOUS,
     FiniteDiscreteInputNode,
     NODE_INPUT,
     NODE_PRODUCT,
@@ -67,6 +70,28 @@ cdef void _check_pair_types(object c1, object c2) except *:
         )
 
 
+cdef double _continuous_w2_scale(object a, object b, GroundMetric m) except *:
+    cdef int d0
+    cdef int d1
+    cdef PNormMetric pn
+    if isinstance(a, CompiledCircuit):
+        d0 = (<CompiledCircuit>a).circuit_domain
+        d1 = (<CompiledCircuit>b).circuit_domain
+    else:
+        d0 = (<CircuitNode>a).circuit_domain
+        d1 = (<CircuitNode>b).circuit_domain
+    if d0 != d1:
+        raise ValueError("cannot couple discrete and continuous circuits")
+    if d0 != DOMAIN_CONTINUOUS:
+        return -1.0
+    if not isinstance(m, PNormMetric):
+        raise ValueError("continuous CW requires a PNormMetric with p=2")
+    pn = <PNormMetric>m
+    if pn.p != 2.0:
+        raise ValueError("continuous CW only supports p-norm W_2 (got p={})".format(pn.p))
+    return pn.scale
+
+
 cdef void _leaf_pmf(FiniteDiscreteInputNode leaf, vector[double]& out) except *:
     cdef size_t n = leaf.support_size()
     cdef size_t k
@@ -108,6 +133,32 @@ cdef class _CWLeaf(TapeEntry):
             arr = c.cat_grad_arr(1, self.P, self.n)
             for k in range(self.n):
                 arr[k] += adj_p[k]
+
+
+cdef class _CWContLeaf(TapeEntry):
+    cdef double scale
+
+    cdef void backward(self, object ctx, double g) except *:
+        cdef CoupleContext c = <CoupleContext>ctx
+        cdef ContinuousInputNode P = <ContinuousInputNode>self.P
+        cdef ContinuousInputNode Q = <ContinuousInputNode>self.Q
+        cdef size_t np = P.n_params()
+        cdef size_t nq = Q.n_params()
+        cdef vector[double] gs
+        cdef vector[double] go
+        cdef object arr
+        cdef size_t k
+        gs.resize(np)
+        go.resize(nq)
+        P.cw_w2sq_backward_c(Q, self.scale, g, gs.data(), go.data())
+        if self.side_Q == 1:
+            arr = c.cont_grad_arr(1, Q, nq)
+            for k in range(nq):
+                arr[k] += go[k]
+        if self.side_P == 1:
+            arr = c.cont_grad_arr(1, P, np)
+            for k in range(np):
+                arr[k] += gs[k]
 
 
 cdef class _CWSumSum(TapeEntry):
@@ -161,6 +212,7 @@ cdef class _CWProdProd(TapeEntry):
 
 cdef class CWContext(CoupleContext):
     cdef GroundMetric metric
+    cdef double cont_scale
 
     cdef double couple_value(self, CircuitNode P, CircuitNode Q, int sP, int sQ) except *:
         cdef double cached
@@ -168,7 +220,12 @@ cdef class CWContext(CoupleContext):
         if self.memo_get(P, Q, &cached):
             return cached
         if P.node_kind == NODE_INPUT and Q.node_kind == NODE_INPUT:
-            res = self._leaf(<FiniteDiscreteInputNode>P, <FiniteDiscreteInputNode>Q, sP, sQ)
+            if P.circuit_domain == DOMAIN_CONTINUOUS:
+                res = self._cont_leaf(
+                    <ContinuousInputNode>P, <ContinuousInputNode>Q, sP, sQ
+                )
+            else:
+                res = self._leaf(<FiniteDiscreteInputNode>P, <FiniteDiscreteInputNode>Q, sP, sQ)
         elif P.node_kind == NODE_SUM and Q.node_kind == NODE_SUM:
             res = self._sum_sum(<SumNode>P, <SumNode>Q, sP, sQ)
         elif P.node_kind == NODE_PRODUCT and Q.node_kind == NODE_PRODUCT:
@@ -180,6 +237,22 @@ cdef class CWContext(CoupleContext):
             )
         self.memo_put(P, Q, res)
         return res
+
+    cdef double _cont_leaf(
+        self, ContinuousInputNode P, ContinuousInputNode Q, int sP, int sQ
+    ) except *:
+        cdef double value
+        cdef _CWContLeaf entry
+        value = P.cw_w2sq_c(Q, self.cont_scale)
+        if self.recording:
+            entry = _CWContLeaf()
+            entry.side_P = sP
+            entry.side_Q = sQ
+            entry.P = P
+            entry.Q = Q
+            entry.scale = self.cont_scale
+            self.append_tape(entry, P, Q)
+        return value
 
     cdef double _leaf(self, FiniteDiscreteInputNode P, FiniteDiscreteInputNode Q, int sP, int sQ) except *:
         cdef size_t n = P.support_size()
@@ -318,6 +391,7 @@ cdef enum CWEntryKind:
     CK_LEAF = 0
     CK_SUMSUM = 1
     CK_PRODPROD = 2
+    CK_CONT_LEAF = 3
 
 
 cdef struct CWEntry:
@@ -336,6 +410,7 @@ cdef struct CWEntry:
     vector[size_t] child_idx
     vector[int] row_ind
     vector[int] col_ind
+    double scale
 
 
 cdef inline uint64_t _flat_pair_key(size_t i0, size_t i1) noexcept:
@@ -354,6 +429,10 @@ cdef void _cw_forward_core(
     const double* sw0,
     const size_t* coff1,
     const double* sw1,
+    const size_t* lparam_off0,
+    const double* lparam0,
+    const size_t* lparam_off1,
+    const double* lparam1,
 ) noexcept nogil:
     cdef size_t t
     cdef CWEntry* e
@@ -398,6 +477,14 @@ cdef void _cw_forward_core(
                     <size_t>e.rows[a] * m + <size_t>e.cols[a]
                 ]
             vals[t] = value
+        elif e.kind == CK_CONT_LEAF:
+            vals[t] = gaussian_w2sq(
+                lparam0[lparam_off0[e.p0]],
+                lparam0[lparam_off0[e.p0] + 1],
+                lparam1[lparam_off1[e.pQ]],
+                lparam1[lparam_off1[e.pQ] + 1],
+                e.scale,
+            )
         elif e.kind == CK_SUMSUM:
             V.resize(n * m)
             for i in range(n):
@@ -439,6 +526,9 @@ cdef void _cw_backward_core(
     CWEntry* ee, double* adj, size_t n_entries,
     const size_t* lpoff1, const size_t* coff1,
     double* cat1, double* sum1,
+    const size_t* lparam_off0, const double* lparam0,
+    const size_t* lparam_off1, const double* lparam1,
+    double* cont1,
 ) noexcept nogil:
     cdef ssize_t t
     cdef CWEntry* e
@@ -456,6 +546,10 @@ cdef void _cw_backward_core(
     cdef vector[double] G
     cdef vector[double] adj_p
     cdef vector[double] adj_q
+    cdef double adj_p_mu
+    cdef double adj_p_s
+    cdef double adj_q_mu
+    cdef double adj_q_s
     for t in range(<ssize_t>n_entries - 1, -1, -1):
         g = adj[<size_t>t]
         if g == 0.0:
@@ -472,6 +566,22 @@ cdef void _cw_backward_core(
             qoff = lpoff1[e.pQ]
             for j in range(m):
                 cat1[qoff + j] += adj_q[j]
+        elif e.kind == CK_CONT_LEAF:
+            qoff = lparam_off1[e.pQ]
+            gaussian_w2sq_grad(
+                lparam0[lparam_off0[e.p0]],
+                lparam0[lparam_off0[e.p0] + 1],
+                lparam1[qoff],
+                lparam1[qoff + 1],
+                e.scale,
+                g,
+                &adj_p_mu,
+                &adj_p_s,
+                &adj_q_mu,
+                &adj_q_s,
+            )
+            cont1[qoff] += adj_q_mu
+            cont1[qoff + 1] += adj_q_s
         elif e.kind == CK_SUMSUM:
             for i in range(n):
                 for j in range(m):
@@ -492,6 +602,7 @@ cdef void _cw_backward_core(
 
 cdef class _FlatCWContext(CoupleContext):
     cdef GroundMetric metric
+    cdef double cont_scale
     cdef CompiledCircuit g0
     cdef CompiledCircuit g1
     cdef unordered_map[uint64_t, size_t] flat_pair_to_tape
@@ -499,6 +610,7 @@ cdef class _FlatCWContext(CoupleContext):
     cdef vector[double] tape_vals
     cdef vector[double] cat1
     cdef vector[double] sum1
+    cdef vector[double] cont1
 
     cdef void _reset_flat(self) except *:
         self.reset_base()
@@ -509,6 +621,7 @@ cdef class _FlatCWContext(CoupleContext):
         self.tape_vals.clear()
         self.cat1.clear()
         self.sum1.clear()
+        self.cont1.clear()
 
     cdef size_t _record_pair(self, size_t i0, size_t i1) except *:
         cdef uint64_t key = _flat_pair_key(i0, i1)
@@ -537,6 +650,18 @@ cdef class _FlatCWContext(CoupleContext):
         cdef vector[double] d_cross
 
         if k0 == NODE_INPUT and k1 == NODE_INPUT:
+            if g0.leaf_kind[i0] == LEAF_GAUSSIAN or g1.leaf_kind[i1] == LEAF_GAUSSIAN:
+                idx = self.etape.size()
+                self.etape.push_back(CWEntry())
+                self.tape_adjoints.push_back(0.0)
+                self.flat_pair_to_tape[key] = idx
+                self.etape[idx].kind = CK_CONT_LEAF
+                self.etape[idx].p0 = i0
+                self.etape[idx].pQ = i1
+                self.etape[idx].n = 2
+                self.etape[idx].m = 2
+                self.etape[idx].scale = self.cont_scale
+                return idx
             n = <size_t>g0.leaf_card[i0]
             m = <size_t>g1.leaf_card[i1]
             idx = self.etape.size()
@@ -615,6 +740,7 @@ cdef class _FlatCWContext(CoupleContext):
         self.g1 = c1
         self.cat1.assign(self.g1.leaf_pmf_flat.size(), 0.0)
         self.sum1.assign(self.g1.children_flat.size(), 0.0)
+        self.cont1.assign(self.g1.leaf_param_flat.size(), 0.0)
         self._record_pair(self.g0.root_index, self.g1.root_index)
         self.tape_vals.assign(self.etape.size(), 0.0)
         with nogil:
@@ -624,6 +750,8 @@ cdef class _FlatCWContext(CoupleContext):
                 self.g1.leaf_pmf_off.data(), self.g1.leaf_pmf_flat.data(),
                 self.g0.child_off.data(), self.g0.sum_w_flat.data(),
                 self.g1.child_off.data(), self.g1.sum_w_flat.data(),
+                self.g0.leaf_param_off.data(), self.g0.leaf_param_flat.data(),
+                self.g1.leaf_param_off.data(), self.g1.leaf_param_flat.data(),
             )
         return self.tape_vals[self.etape.size() - 1]
 
@@ -639,11 +767,15 @@ cdef class _FlatCWContext(CoupleContext):
                 self.etape.data(), self.tape_adjoints.data(), self.etape.size(),
                 self.g1.leaf_pmf_off.data(), self.g1.child_off.data(),
                 self.cat1.data(), self.sum1.data(),
+                self.g0.leaf_param_off.data(), self.g0.leaf_param_flat.data(),
+                self.g1.leaf_param_off.data(), self.g1.leaf_param_flat.data(),
+                self.cont1.data(),
             )
         cdef GradBundle grads = GradBundle()
         grads.value = value
         grads.sum_grads = self._grads_for(True)
         grads.cat_grads = self._grads_for(False)
+        grads.cont_grads = self._cont_grads()
         return (value, grads)
 
     cdef dict _grads_for(self, bint sums):
@@ -668,12 +800,34 @@ cdef class _FlatCWContext(CoupleContext):
             else:
                 if self.g1.kinds[nn] != NODE_INPUT:
                     continue
+                if self.g1.leaf_kind[nn] == LEAF_GAUSSIAN:
+                    continue
                 off = self.g1.leaf_pmf_off[nn]
                 card = self.g1.leaf_card[nn]
                 arr = np.empty(card, dtype=np.float64)
                 for k in range(<size_t>card):
                     arr[k] = self.cat1[off + k]
                 out[self.g1.node_ids[nn]] = arr
+        return out
+
+    cdef dict _cont_grads(self):
+        cdef dict out = {}
+        cdef size_t nn
+        cdef size_t off
+        cdef size_t k
+        cdef int np
+        cdef object arr
+        for nn in range(self.g1.n_nodes):
+            if self.g1.kinds[nn] != NODE_INPUT:
+                continue
+            if self.g1.leaf_kind[nn] != LEAF_GAUSSIAN:
+                continue
+            off = self.g1.leaf_param_off[nn]
+            np = self.g1.leaf_n_param[nn]
+            arr = np.empty(np, dtype=np.float64)
+            for k in range(<size_t>np):
+                arr[k] = self.cont1[off + k]
+            out[self.g1.node_ids[nn]] = arr
         return out
 
 
@@ -715,12 +869,14 @@ cpdef double cw_distance(
         c2 = circuit2
         flat = _FlatCWContext()
         flat.metric = m
+        flat.cont_scale = _continuous_w2_scale(c1, c2, m)
         return flat.solve_value(c1, c2)
     r1 = _unwrap(circuit1)
     r2 = _unwrap(circuit2)
     ctx = CWContext()
     ctx.reset_base()
     ctx.metric = m
+    ctx.cont_scale = _continuous_w2_scale(r1, r2, m)
     return ctx.couple_value(r1, r2, 0, 1)
 
 
@@ -761,12 +917,14 @@ cpdef tuple cw_distance_and_grad(
         c2 = circuit2
         flat = _FlatCWContext()
         flat.metric = m
+        flat.cont_scale = _continuous_w2_scale(c1, c2, m)
         return flat.solve_with_grad(c1, c2)
     r1 = _unwrap(circuit1)
     r2 = _unwrap(circuit2)
     ctx = CWContext()
     ctx.reset_base()
     ctx.metric = m
+    ctx.cont_scale = _continuous_w2_scale(r1, r2, m)
     ctx.recording = True
     try:
         value = ctx.couple_value(r1, r2, 0, 1)
@@ -781,4 +939,5 @@ cpdef tuple cw_distance_and_grad(
     grads.value = value
     grads.sum_grads = ctx.sum_grads1
     grads.cat_grads = ctx.cat_grads1
+    grads.cont_grads = ctx.cont_grads1
     return (value, grads)

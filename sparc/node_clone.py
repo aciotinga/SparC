@@ -7,6 +7,7 @@ from sparc.nodes import (
     CategoricalInputNode,
     CircuitNode,
     DiscreteLogisticInputNode,
+    GaussianInputNode,
     IndicatorInputNode,
     LiteralInputNode,
     ProductNode,
@@ -44,6 +45,13 @@ def clone_node(node: CircuitNode, memo: dict) -> CircuitNode:
             node.mu_value(),
             node.s_value(),
             node.num_categories(),
+            id=node.id,
+        )
+    elif isinstance(node, GaussianInputNode):
+        new = GaussianInputNode(
+            node.scope_as_list()[0],
+            node.mu_value(),
+            node.sigma_value(),
             id=node.id,
         )
     elif isinstance(node, SumNode):
