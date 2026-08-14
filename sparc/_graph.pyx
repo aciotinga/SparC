@@ -43,8 +43,37 @@ from sparc.nodes cimport (
 from sparc._continuous cimport gaussian_density, gaussian_log_density
 from sparc._mathutils cimport SP_MAX_SUM_FANIN, sp_logsumexp_ptr
 
+include "_openmp_flag.pxi"
+
+IF SPARC_OPENMP:
+    from cython.parallel cimport parallel
+    from openmp cimport omp_get_max_threads, omp_get_num_threads, omp_get_thread_num, omp_set_num_threads
+
 
 cdef int SP_MISSING_EVIDENCE = -1
+cdef int OMP_MIN_ROWS = 64
+cdef Py_ssize_t OMP_WORK_PER_THREAD = 8192
+
+
+cdef inline int _omp_team_size(size_t n_nodes, Py_ssize_t n_rows) noexcept nogil:
+    """Cap OpenMP team size so tiny evals do not oversubscribe."""
+    cdef Py_ssize_t work
+    cdef int max_t
+    cdef int want
+    IF SPARC_OPENMP:
+        if n_rows < OMP_MIN_ROWS:
+            return 1
+        max_t = omp_get_max_threads()
+        if max_t <= 1:
+            return 1
+        work = <Py_ssize_t>n_nodes * n_rows
+        want = <int>(work // OMP_WORK_PER_THREAD)
+        if want < 1:
+            return 1
+        if want > max_t:
+            return max_t
+        return want
+    return 1
 
 
 cdef inline double sp_graph_sigmoid(double x) noexcept nogil:
@@ -379,11 +408,12 @@ cdef void _flat_eval_sum_node(
 cdef void _flat_eval_sum_node_batch(
     CompiledCircuit g,
     size_t n,
-    Py_ssize_t n_rows,
     bint log_space,
     double[:, ::1] val,
+    Py_ssize_t r0,
+    Py_ssize_t r1,
 ) noexcept nogil:
-    """Evaluate a single sum node across all batch lanes (val[n, r])."""
+    """Evaluate a single sum node on batch lanes ``[r0, r1)`` (val[n, r])."""
     cdef size_t start = g.child_off[n]
     cdef size_t stop = g.child_off[n + 1]
     cdef size_t k
@@ -396,17 +426,17 @@ cdef void _flat_eval_sum_node_batch(
     cdef double term
     if log_space:
         if nf == 0:
-            for r in range(n_rows):
+            for r in range(r0, r1):
                 val[n, r] = -INFINITY
         elif nf <= SP_MAX_SUM_FANIN:
-            for r in range(n_rows):
+            for r in range(r0, r1):
                 for k in range(start, stop):
                     terms[k - start] = (
                         g.sum_logw_flat[k] + val[g.children_flat[k], r]
                     )
                 val[n, r] = sp_logsumexp_ptr(terms, nf)
         else:
-            for r in range(n_rows):
+            for r in range(r0, r1):
                 max_log = -INFINITY
                 for k in range(start, stop):
                     term = g.sum_logw_flat[k] + val[g.children_flat[k], r]
@@ -425,7 +455,7 @@ cdef void _flat_eval_sum_node_batch(
                     else:
                         val[n, r] = max_log + log(sum_exp)
     else:
-        for r in range(n_rows):
+        for r in range(r0, r1):
             acc = 0.0
             for k in range(start, stop):
                 acc += g.sum_w_flat[k] * val[g.children_flat[k], r]
@@ -463,14 +493,15 @@ cdef void _validate_batch_data(
                 )
 
 
-cdef void _flat_eval_batch(
+cdef void _flat_eval_batch_range(
     CompiledCircuit g,
     const int[:, ::1] data,
     const vector[int]& leaf_col,
-    Py_ssize_t n_rows,
     bint log_space,
     double[:, ::1] val,
     double[::1] out,
+    Py_ssize_t r0,
+    Py_ssize_t r1,
 ) noexcept nogil:
     cdef size_t n
     cdef size_t k
@@ -488,14 +519,14 @@ cdef void _flat_eval_batch(
             col = leaf_col[n]
             off = g.leaf_pmf_off[n]
             if log_space:
-                for r in range(n_rows):
+                for r in range(r0, r1):
                     value = data[r, col]
                     if value < 0:
                         val[n, r] = 0.0
                     else:
                         val[n, r] = g.leaf_logpmf_flat[off + value]
             else:
-                for r in range(n_rows):
+                for r in range(r0, r1):
                     value = data[r, col]
                     if value < 0:
                         val[n, r] = 1.0
@@ -505,21 +536,51 @@ cdef void _flat_eval_batch(
             start = g.child_off[n]
             stop = g.child_off[n + 1]
             if log_space:
-                for r in range(n_rows):
+                for r in range(r0, r1):
                     acc = 0.0
                     for k in range(start, stop):
                         acc += val[g.children_flat[k], r]
                     val[n, r] = acc
             else:
-                for r in range(n_rows):
+                for r in range(r0, r1):
                     acc = 1.0
                     for k in range(start, stop):
                         acc *= val[g.children_flat[k], r]
                     val[n, r] = acc
         else:
-            _flat_eval_sum_node_batch(g, n, n_rows, log_space, val)
-    for r in range(n_rows):
+            _flat_eval_sum_node_batch(g, n, log_space, val, r0, r1)
+    for r in range(r0, r1):
         out[r] = val[g.root_index, r]
+
+
+cdef void _flat_eval_batch(
+    CompiledCircuit g,
+    const int[:, ::1] data,
+    const vector[int]& leaf_col,
+    Py_ssize_t n_rows,
+    bint log_space,
+    double[:, ::1] val,
+    double[::1] out,
+) noexcept nogil:
+    cdef int tid
+    cdef int nt
+    cdef int want
+    cdef Py_ssize_t r0
+    cdef Py_ssize_t r1
+    IF SPARC_OPENMP:
+        want = _omp_team_size(g.n_nodes, n_rows)
+        if want > 1:
+            with parallel(num_threads=want):
+                nt = omp_get_num_threads()
+                tid = omp_get_thread_num()
+                r0 = (n_rows * <Py_ssize_t>tid) // <Py_ssize_t>nt
+                r1 = (n_rows * <Py_ssize_t>(tid + 1)) // <Py_ssize_t>nt
+                if r0 < r1:
+                    _flat_eval_batch_range(
+                        g, data, leaf_col, log_space, val, out, r0, r1
+                    )
+            return
+    _flat_eval_batch_range(g, data, leaf_col, log_space, val, out, 0, n_rows)
 
 
 cdef double _flat_eval(
@@ -607,14 +668,15 @@ cdef void _flat_sample_node(
         _flat_sample_node(g, idx, rng, out)
 
 
-cdef void _flat_eval_batch_continuous(
+cdef void _flat_eval_batch_continuous_range(
     CompiledCircuit g,
     const double[:, ::1] data,
     const vector[int]& leaf_col,
-    Py_ssize_t n_rows,
     bint log_space,
     double[:, ::1] val,
     double[::1] out,
+    Py_ssize_t r0,
+    Py_ssize_t r1,
 ) noexcept nogil:
     cdef size_t n
     cdef size_t k
@@ -635,7 +697,7 @@ cdef void _flat_eval_batch_continuous(
             pbase = g.leaf_param_off[n]
             mu = g.leaf_param_flat[pbase]
             sigma = g.leaf_param_flat[pbase + 1]
-            for r in range(n_rows):
+            for r in range(r0, r1):
                 x = data[r, col]
                 if x != x:  # NaN
                     val[n, r] = 0.0 if log_space else 1.0
@@ -647,21 +709,53 @@ cdef void _flat_eval_batch_continuous(
             start = g.child_off[n]
             stop = g.child_off[n + 1]
             if log_space:
-                for r in range(n_rows):
+                for r in range(r0, r1):
                     acc = 0.0
                     for k in range(start, stop):
                         acc += val[g.children_flat[k], r]
                     val[n, r] = acc
             else:
-                for r in range(n_rows):
+                for r in range(r0, r1):
                     acc = 1.0
                     for k in range(start, stop):
                         acc *= val[g.children_flat[k], r]
                     val[n, r] = acc
         else:
-            _flat_eval_sum_node_batch(g, n, n_rows, log_space, val)
-    for r in range(n_rows):
+            _flat_eval_sum_node_batch(g, n, log_space, val, r0, r1)
+    for r in range(r0, r1):
         out[r] = val[g.root_index, r]
+
+
+cdef void _flat_eval_batch_continuous(
+    CompiledCircuit g,
+    const double[:, ::1] data,
+    const vector[int]& leaf_col,
+    Py_ssize_t n_rows,
+    bint log_space,
+    double[:, ::1] val,
+    double[::1] out,
+) noexcept nogil:
+    cdef int tid
+    cdef int nt
+    cdef int want
+    cdef Py_ssize_t r0
+    cdef Py_ssize_t r1
+    IF SPARC_OPENMP:
+        want = _omp_team_size(g.n_nodes, n_rows)
+        if want > 1:
+            with parallel(num_threads=want):
+                nt = omp_get_num_threads()
+                tid = omp_get_thread_num()
+                r0 = (n_rows * <Py_ssize_t>tid) // <Py_ssize_t>nt
+                r1 = (n_rows * <Py_ssize_t>(tid + 1)) // <Py_ssize_t>nt
+                if r0 < r1:
+                    _flat_eval_batch_continuous_range(
+                        g, data, leaf_col, log_space, val, out, r0, r1
+                    )
+            return
+    _flat_eval_batch_continuous_range(
+        g, data, leaf_col, log_space, val, out, 0, n_rows
+    )
 
 
 cdef void _flat_sample_node_continuous(
@@ -1186,3 +1280,23 @@ cdef class CompiledCircuit:
     def expected_squared_distance_and_grad(self, double metric_p=1.0, double scale_factor=1.0, object metric=None):
         from sparc.queries.esd import expected_squared_distance_and_grad
         return expected_squared_distance_and_grad(self, metric_p=metric_p, scale_factor=scale_factor, metric=metric)
+
+
+def _omp_enabled():
+    """Internal: whether ``sparc._graph`` was compiled with OpenMP."""
+    return bool(SPARC_OPENMP)
+
+
+def _omp_max_threads():
+    """Internal: OpenMP max threads (1 if compiled without OpenMP)."""
+    IF SPARC_OPENMP:
+        return omp_get_max_threads()
+    return 1
+
+
+def _omp_set_num_threads(int n):
+    """Implementation of :func:`sparc.set_num_threads` / ``sparc.num_threads``."""
+    if n < 1:
+        raise ValueError("n must be >= 1")
+    IF SPARC_OPENMP:
+        omp_set_num_threads(n)

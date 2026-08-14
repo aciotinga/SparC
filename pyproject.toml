@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sparc-pc"
-version = "0.8.0"
+version = "0.8.1"
 description = "SparC: fast, modular sparse probabilistic circuits in Cython (CPU-only)"
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
@@ -70,7 +70,7 @@ where = ["."]
 include = ["sparc*"]
 
 [tool.setuptools.package-data]
-"sparc" = ["*.pyx", "*.pxd", "py.typed"]
+"sparc" = ["*.pyx", "*.pxd", "*.pxi", "py.typed"]
 
 [tool.cibuildwheel]
 build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
@@ -85,6 +85,8 @@ test-command = "python -c \"import sparc; from sparc import CategoricalInputNode
 
 [tool.cibuildwheel.macos]
 archs = ["x86_64", "arm64"]
+environment = { SPARC_OPENMP = "1" }
+before-all = "brew install libomp"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

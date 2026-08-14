@@ -72,6 +72,21 @@ compiler can auto-vectorize across the sample axis. The public API is unchanged
 (`log_likelihood` / `likelihood` on `CompiledCircuit`); only the internal
 `nogil` kernel differs from the per-row scalar loop.
 
+On Linux/Windows (and macOS wheels built with `libomp`), that row axis may run
+under OpenMP: the batch is split once per eval, each thread walking the full
+DAG on its row slice. Cap the team at the top of a script:
+
+```python
+import sparc
+
+sparc.num_threads = 8          # or sparc.set_num_threads(8)
+```
+
+`OMP_NUM_THREADS` still works if you never set this. There is no per-call
+`n_threads` argument. Tiny batches (`< 64` rows) and tiny `n_nodes × n_rows`
+stay serial so fork overhead cannot dominate. `sparc.num_threads = 1` forces
+serial compiled batches.
+
 ## Migration
 
 | Before | After |

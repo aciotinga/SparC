@@ -13,6 +13,7 @@ __pycache__/
 *.cpp
 *.html
 *.pyd.bak
+sparc/_openmp_flag.pxi
 
 # Distribution / packaging
 build/

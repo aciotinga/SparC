@@ -143,6 +143,103 @@ class TestCompiledCircuit:
         assert_allclose(batched, expected, rtol=0, atol=1e-12)
 
 
+class TestOpenMPBatchInvariance:
+    """Compiled batch eval must not depend on OpenMP thread count."""
+
+    @pytest.fixture
+    def omp(self):
+        from sparc._graph import (
+            _omp_enabled,
+            _omp_max_threads,
+            _omp_set_num_threads,
+        )
+
+        prev = int(_omp_max_threads())
+        yield _omp_set_num_threads, _omp_enabled()
+        _omp_set_num_threads(max(prev, 1))
+
+    def test_log_likelihood_invariant_across_threads(self, omp):
+        set_n, _enabled = omp
+        circuit = _mixed_circuit()
+        compiled = circuit.compile()
+        rng = np.random.default_rng(1)
+        width = max(circuit.scope_as_list()) + 1
+        sizes = (1, 2, 3, 63, 64, 65, 1000)
+        thread_counts = (1, 2, 3, 8)
+        for n_rows in sizes:
+            data = rng.integers(0, 2, size=(n_rows, width), dtype=np.int32)
+            set_n(1)
+            ref = compiled.log_likelihood(data)
+            for nt in thread_counts:
+                set_n(nt)
+                got = compiled.log_likelihood(data)
+                assert_allclose(got, ref, rtol=0, atol=1e-12)
+
+    def test_likelihood_linear_space_invariant(self, omp):
+        set_n, _enabled = omp
+        circuit = _mixed_circuit()
+        compiled = circuit.compile()
+        rng = np.random.default_rng(2)
+        width = max(circuit.scope_as_list()) + 1
+        data = rng.integers(0, 2, size=(128, width), dtype=np.int32)
+        set_n(1)
+        ref = compiled.likelihood(data)
+        set_n(8)
+        got = compiled.likelihood(data)
+        assert_allclose(got, ref, rtol=0, atol=1e-12)
+
+    def test_large_fanin_sum_invariant(self, omp):
+        set_n, _enabled = omp
+        n_children = 65
+        children = [
+            CategoricalInputNode(0, [0.35, 0.65]) for _ in range(n_children)
+        ]
+        w = [1.0 / n_children] * n_children
+        root = SumNode(children, w)
+        compiled = root.compile()
+        data = np.array([[0], [1]] * 64, dtype=np.int32)
+        set_n(1)
+        ref = compiled.log_likelihood(data)
+        set_n(4)
+        got = compiled.log_likelihood(data)
+        assert_allclose(got, ref, rtol=0, atol=1e-12)
+        per_row = np.array([root.log_likelihood(data[r]) for r in range(4)])
+        assert_allclose(got[:4], per_row, rtol=0, atol=1e-10)
+
+    def test_compiled_matches_object_graph_multithreaded(self, omp):
+        set_n, _enabled = omp
+        set_n(8)
+        circuit = _mixed_circuit()
+        compiled = circuit.compile()
+        rng = np.random.default_rng(3)
+        width = max(circuit.scope_as_list()) + 1
+        data = rng.integers(0, 2, size=(80, width), dtype=np.int32)
+        batched = compiled.log_likelihood(data)
+        per_row = np.array([circuit.log_likelihood(data[r]) for r in range(80)])
+        assert_allclose(batched, per_row, rtol=0, atol=1e-10)
+
+
+class TestNumThreadsApi:
+    def test_assignment_and_setter(self):
+        import sparc
+        from sparc._graph import _omp_enabled
+
+        prev = sparc.num_threads
+        try:
+            sparc.num_threads = 2
+            if _omp_enabled():
+                assert sparc.get_num_threads() == 2
+                assert sparc.num_threads == 2
+            else:
+                assert sparc.get_num_threads() == 1
+            sparc.set_num_threads(1)
+            assert sparc.num_threads == 1
+            with pytest.raises(ValueError):
+                sparc.set_num_threads(0)
+        finally:
+            sparc.num_threads = max(int(prev), 1)
+
+
 class TestEvalPathParity:
     """Object-path eval must agree with root-node API and compiled path."""
 

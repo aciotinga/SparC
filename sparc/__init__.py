@@ -15,6 +15,8 @@ Full documentation: https://sparc-docs.readthedocs.io
 from __future__ import annotations
 
 import importlib
+import sys
+import types
 from importlib.metadata import PackageNotFoundError, version
 
 try:
@@ -59,6 +61,8 @@ __all__ = [
     "gcw_crossterm",
     "gcw_crossterm_and_grad",
     "gcw_coupling_circuit",
+    "set_num_threads",
+    "get_num_threads",
 ]
 
 _LAZY_EXPORTS = {
@@ -104,6 +108,38 @@ _LAZY_EXPORTS = {
 }
 
 
+def set_num_threads(n: int) -> None:
+    """Cap the OpenMP team used by compiled batched likelihood.
+
+    Call once at the top of a script (or assign ``sparc.num_threads = n``).
+    Does not change object-graph eval, sampling, or query kernels. ``n=1``
+    forces serial compiled batches. No-op if SparC was built without OpenMP.
+    """
+    from sparc._graph import _omp_set_num_threads
+
+    _omp_set_num_threads(int(n))
+
+
+def get_num_threads() -> int:
+    """Current OpenMP max-thread cap (always ``1`` without OpenMP)."""
+    from sparc._graph import _omp_max_threads
+
+    return int(_omp_max_threads())
+
+
+class _SparCModule(types.ModuleType):
+    @property
+    def num_threads(self) -> int:
+        return get_num_threads()
+
+    @num_threads.setter
+    def num_threads(self, n: int) -> None:
+        set_num_threads(n)
+
+
+sys.modules[__name__].__class__ = _SparCModule
+
+
 def __getattr__(name: str):
     spec = _LAZY_EXPORTS.get(name)
     if spec is None:
@@ -116,4 +152,4 @@ def __getattr__(name: str):
 
 
 def __dir__():
-    return sorted(set(globals()) | set(__all__))
+    return sorted(set(globals()) | set(__all__) | {"num_threads"})

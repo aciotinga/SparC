@@ -56,18 +56,62 @@ def _to_path(dotted: str) -> str:
     return dotted.replace(".", "/") + ".pyx"
 
 
-ext_modules = cythonize(
-    [
+def _truthy(name: str) -> bool:
+    return os.environ.get(name, "").lower() in ("1", "true", "yes")
+
+
+def _libomp_prefix():
+    for path in ("/opt/homebrew/opt/libomp", "/usr/local/opt/libomp"):
+        if os.path.isdir(path):
+            return path
+    return None
+
+
+def _openmp_config():
+    """OpenMP flags for sparc._graph only. macOS is serial unless SPARC_OPENMP=1."""
+    if _truthy("SPARC_NO_OPENMP"):
+        return False, [], []
+    if sys.platform == "darwin":
+        if not _truthy("SPARC_OPENMP"):
+            return False, [], []
+        prefix = _libomp_prefix()
+        compile_args = ["-Xpreprocessor", "-fopenmp"]
+        link_args = ["-lomp"]
+        if prefix:
+            compile_args.extend(["-I" + os.path.join(prefix, "include")])
+            link_args.extend(["-L" + os.path.join(prefix, "lib")])
+        return True, compile_args, link_args
+    if _is_msvc:
+        return True, ["/openmp"], []
+    return True, ["-fopenmp"], ["-fopenmp"]
+
+
+_use_openmp, _omp_cflags, _omp_lflags = _openmp_config()
+
+_pxi_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sparc", "_openmp_flag.pxi")
+with open(_pxi_path, "w", encoding="utf-8") as _pxi:
+    _pxi.write(f"DEF SPARC_OPENMP = {1 if _use_openmp else 0}\n")
+
+_extensions = []
+for _name in _pyx_modules:
+    _cflags = list(extra_compile_args)
+    _lflags = list(extra_link_args)
+    if _name == "sparc._graph":
+        _cflags.extend(_omp_cflags)
+        _lflags.extend(_omp_lflags)
+    _extensions.append(
         Extension(
-            name,
-            [_to_path(name)],
+            _name,
+            [_to_path(_name)],
             language="c++",
             include_dirs=[_numpy_include],
-            extra_compile_args=extra_compile_args,
-            extra_link_args=extra_link_args,
+            extra_compile_args=_cflags,
+            extra_link_args=_lflags,
         )
-        for name in _pyx_modules
-    ],
+    )
+
+ext_modules = cythonize(
+    _extensions,
     compiler_directives={"language_level": "3", "embedsignature": True},
 )
 

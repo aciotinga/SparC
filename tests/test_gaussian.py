@@ -218,3 +218,27 @@ def test_structure_gaussian_hmm():
     xs = circuit.sample(4, seed=1)
     assert xs.dtype == np.float64
     assert xs.shape[1] >= 3
+
+
+def test_compiled_gaussian_batch_omp_invariant():
+    from sparc._graph import _omp_max_threads, _omp_set_num_threads
+
+    leaves = [GaussianInputNode(i, float(i) * 0.1, 0.8) for i in range(4)]
+    root = ProductNode(leaves)
+    compiled = root.compile()
+    rng = np.random.default_rng(0)
+    data = rng.normal(size=(128, 4)).astype(np.float64)
+    data[3, 1] = np.nan
+    data[10, :] = np.nan
+    prev = int(_omp_max_threads())
+    try:
+        _omp_set_num_threads(1)
+        ref = compiled.log_likelihood(data)
+        _omp_set_num_threads(8)
+        got = compiled.log_likelihood(data)
+        assert_allclose(got, ref, rtol=0, atol=1e-12)
+        observed = np.isfinite(data).all(axis=1)
+        obj = root.log_likelihood(data[observed])
+        assert_allclose(got[observed], obj, rtol=0, atol=1e-10)
+    finally:
+        _omp_set_num_threads(max(prev, 1))
