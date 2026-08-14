@@ -5,16 +5,26 @@ from libcpp.unordered_set cimport unordered_set
 from libcpp.vector cimport vector
 
 # Node-kind tags. All leaf node types share NODE_INPUT; queries that need to
-# inspect a leaf's distribution go through the FiniteDiscreteInputNode vtable.
+# inspect a leaf's distribution go through the FiniteDiscreteInputNode or
+# ContinuousInputNode vtable.
 cdef enum NodeKind:
     NODE_SUM = 0
     NODE_PRODUCT = 1
     NODE_INPUT = 2
 
+# A circuit is all-discrete or all-continuous (no mixed input nodes).
+cdef enum CircuitDomain:
+    DOMAIN_UNSET = 0
+    DOMAIN_DISCRETE = 1
+    DOMAIN_CONTINUOUS = 2
+
 cdef class RandomState:
     cdef mt19937_64 rng
     cdef uniform_real_distribution[double] dist
+    cdef double spare
+    cdef bint has_spare
     cdef double next_double(self) noexcept nogil
+    cdef double next_normal(self) noexcept nogil
 
 cdef class Evidence:
     cdef vector[int] _buf
@@ -26,9 +36,18 @@ cdef class Evidence:
     cdef void init_dense(self, int width) except *
     cdef void set_var(self, int var, int value) noexcept
 
+cdef class ContinuousEvidence:
+    cdef vector[double] _buf
+
+    cdef double get(self, int var) except *
+    cdef bint has(self, int var) noexcept
+    cdef void init_dense(self, int width) except *
+    cdef void set_var(self, int var, double value) noexcept
+
 cdef class CircuitNode:
     cdef readonly size_t id
     cdef readonly int node_kind
+    cdef readonly int circuit_domain
     cdef unordered_set[int] scope
 
     cdef void _propagate_scope_impl(self, unordered_set[size_t]& visited) except *
@@ -106,3 +125,43 @@ cdef class DiscreteLogisticInputNode(FiniteDiscreteInputNode):
     cpdef double mu_value(self)
     cpdef double s_value(self)
     cpdef Py_ssize_t num_categories(self)
+
+cdef class ContinuousInputNode(InputNode):
+    cdef int scope_var_c(self) except *
+    cdef size_t n_params(self) noexcept
+    cdef void params_into(self, double* out) except *
+    cdef void set_params_from(self, const double* src, size_t n) except *
+    cdef double log_density_c(self, ContinuousEvidence ev) except *
+    cdef double density_c(self, ContinuousEvidence ev) except *
+    cdef void sample_into_continuous(self, RandomState rng, double* out) except *
+    cdef void log_density_backward_c(
+        self, ContinuousEvidence ev, double g, double* g_self
+    ) except *
+    cdef double cw_w2sq_c(self, ContinuousInputNode other, double scale) except *
+    cdef void cw_w2sq_backward_c(
+        self, ContinuousInputNode other, double scale, double g,
+        double* g_self, double* g_other,
+    ) except *
+    cdef double inner_product_c(self, ContinuousInputNode other) except *
+    cdef void inner_product_backward_c(
+        self, ContinuousInputNode other, double g,
+        double* g_self, double* g_other,
+    ) except *
+    cdef double log_inner_product_c(self, ContinuousInputNode other) except *
+    cdef void log_inner_product_backward_c(
+        self, ContinuousInputNode other, double g,
+        double* g_self, double* g_other,
+    ) except *
+    cdef double esd_c(self, double scale) except *
+    cdef void esd_backward_c(self, double scale, double g, double* g_self) except *
+    cpdef list parameters_list(self)
+    cpdef void set_params_list(self, object params) except *
+
+cdef class GaussianInputNode(ContinuousInputNode):
+    cdef double mu
+    cdef double sigma
+
+    cpdef double mu_value(self)
+    cpdef double sigma_value(self)
+    cpdef void set_mu(self, double mu) except *
+    cpdef void set_sigma(self, double sigma) except *

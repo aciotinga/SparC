@@ -95,9 +95,10 @@ Differentiable mode requires:
 - an acyclic graph with unique node IDs.
 
 Indicator, literal, and discrete-logistic leaves can appear in a sample but
-do not produce leaf-parameter gradients. Other custom `InputNode` leaves are
-unsupported in differentiable mode. Legacy sampling remains available for
-circuits that do not satisfy these requirements.
+do not produce leaf-parameter gradients. Continuous Gaussian circuits use
+reparameterization $x=\mu+\sigma\varepsilon$ instead of SIMPLE; `vjp` takes a
+gradient on `assignments` (`float64`) and writes `GradBundle.cont_grads`.
+`one_hot` is empty for continuous tapes.
 
 Version 0.7 implements unconditional differentiable sampling, matching the
 existing `sample()` semantics. It does not accept evidence or implement APC's

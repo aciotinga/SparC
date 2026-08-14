@@ -3,8 +3,8 @@
 """Differentiable mean log-likelihood (reverse-mode AD over the circuit DAG).
 
 ``GradBundle`` is the single gradient container used everywhere in SparC:
-``value`` plus ``sum_grads`` / ``cat_grads`` dicts keyed by ``node.id``. Two-
-circuit queries simply return a pair of ``GradBundle`` objects.
+``value`` plus ``sum_grads`` / ``cat_grads`` / ``cont_grads`` dicts keyed by
+``node.id``. Two-circuit queries simply return a pair of ``GradBundle`` objects.
 """
 
 from libcpp.unordered_map cimport unordered_map
@@ -17,6 +17,7 @@ cimport numpy as cnp
 from sparc._graph cimport (
     CompiledCircuit,
     SP_MISSING_EVIDENCE,
+    _coerce_continuous_data,
     _coerce_likelihood_data_with_missing,
     _flat_eval_batch,
     _leaf_column_map,
@@ -24,11 +25,14 @@ from sparc._graph cimport (
     _validate_batch_data,
 )
 from sparc._mathutils cimport sp_logsumexp, sp_safe_log
-from sparc.eval cimport _evidence_from_row
+from sparc.eval cimport _cont_evidence_from_row, _evidence_from_row
 from sparc.nodes cimport (
     BernoulliInputNode,
     CategoricalInputNode,
     CircuitNode,
+    ContinuousEvidence,
+    ContinuousInputNode,
+    DOMAIN_CONTINUOUS,
     Evidence,
     FiniteDiscreteInputNode,
     InputNode,
@@ -52,6 +56,8 @@ cdef class GradBundle:
             upstream gradient, not the originating scalar objective.
         sum_grads: ``SumNode.id`` -> gradient w.r.t. that node's parameters.
         cat_grads: Leaf ``id`` -> gradient w.r.t. leaf probabilities.
+        cont_grads: Continuous leaf ``id`` -> gradient w.r.t. leaf parameters
+            (Gaussian: ``[dμ, dσ]``).
 
     Gradients are w.r.t. linear parameters (no simplex projection). Project
     onto the simplex tangent before stepping (see :mod:`sparc.optim`).
@@ -62,6 +68,7 @@ cdef class GradBundle:
         self.has_value = True
         self.sum_grads = {}
         self.cat_grads = {}
+        self.cont_grads = {}
 
 
 cdef object grad_arr(dict store, object key, size_t n):
@@ -76,16 +83,21 @@ cdef class _LLGradContext:
     """Reverse-mode AD over the log-likelihood DAG, accumulated over a dataset."""
 
     cdef Evidence evidence
+    cdef ContinuousEvidence cont_evidence
+    cdef bint continuous
     cdef unordered_map[size_t, double] memo
     cdef unordered_map[size_t, double] adjoints
     cdef list tape
     cdef dict sum_grads
     cdef dict cat_grads
+    cdef dict cont_grads
 
     def __cinit__(self):
         self.tape = []
         self.sum_grads = {}
         self.cat_grads = {}
+        self.cont_grads = {}
+        self.continuous = False
 
     cdef void _reset(self):
         self.memo.clear()
@@ -112,6 +124,8 @@ cdef class _LLGradContext:
         cdef double total
         cdef vector[double] terms
         if node.node_kind == NODE_INPUT:
+            if self.continuous:
+                return (<ContinuousInputNode>node).log_density_c(self.cont_evidence)
             return sp_safe_log((<InputNode>node).prob_c(self.evidence))
         if node.node_kind == NODE_PRODUCT:
             prod = <ProductNode>node
@@ -149,10 +163,26 @@ cdef class _LLGradContext:
 
     cdef void _backward_leaf(self, InputNode node, double bar) except *:
         cdef FiniteDiscreteInputNode leaf
+        cdef ContinuousInputNode cont
         cdef int var
         cdef int value
         cdef double p_v
         cdef object arr
+        cdef size_t np
+        cdef vector[double] gbuf
+        if self.continuous:
+            if not isinstance(node, ContinuousInputNode):
+                return
+            cont = <ContinuousInputNode>node
+            np = cont.n_params()
+            if np == 0:
+                return
+            gbuf.resize(np)
+            cont.log_density_backward_c(self.cont_evidence, bar, gbuf.data())
+            arr = grad_arr(self.cont_grads, cont.id, np)
+            for value in range(<int>np):
+                arr[value] += gbuf[<size_t>value]
+            return
         if not (isinstance(node, CategoricalInputNode)
                 or isinstance(node, BernoulliInputNode)):
             return
@@ -224,7 +254,43 @@ cdef class _LLGradContext:
         grads.value = total_ll * inv_n
         grads.sum_grads = self.sum_grads
         grads.cat_grads = self.cat_grads
+        grads.cont_grads = self.cont_grads
         return (grads.value, grads)
+
+
+cdef tuple _solve_dataset_continuous(
+    CircuitNode root, cnp.ndarray arr, object var_to_col, bint allow_missing
+):
+    cdef _LLGradContext ctx = _LLGradContext()
+    ctx.continuous = True
+    cdef Py_ssize_t n = arr.shape[0]
+    cdef Py_ssize_t idx
+    cdef double total_ll = 0.0
+    cdef double inv_n
+    cdef double ll
+    cdef GradBundle grads
+    if root.scope.size() == 0:
+        root.propagate_scope()
+    cdef int max_var = _max_var_from_scope(root.scope)
+    if n == 0:
+        raise ValueError("dataset must contain at least one datapoint")
+    inv_n = 1.0 / <double>n
+    for idx in range(n):
+        ctx.cont_evidence = _cont_evidence_from_row(
+            arr[idx], arr.shape[1], max_var, root.scope, var_to_col, allow_missing
+        )
+        ctx._reset()
+        ll = ctx._forward(root)
+        total_ll += ll
+        if ll > NEG_INF:
+            ctx._add_adjoint(root.id, inv_n)
+            ctx._run_backward()
+    grads = GradBundle()
+    grads.value = total_ll * inv_n
+    grads.sum_grads = ctx.sum_grads
+    grads.cat_grads = ctx.cat_grads
+    grads.cont_grads = ctx.cont_grads
+    return (grads.value, grads)
 
 
 # --- Flattened nogil gradient path --------------------------------------------
@@ -370,9 +436,12 @@ def mean_log_likelihood_and_grad(CircuitNode root, object dataset, object var_to
     """Mean log-likelihood and gradient (object-graph path)."""
     cdef cnp.ndarray arr
     cdef bint allow_missing
-    arr, allow_missing = _coerce_likelihood_data_with_missing(dataset, False)
     if root.scope.size() == 0:
         root.propagate_scope()
+    if root.circuit_domain == DOMAIN_CONTINUOUS:
+        arr, allow_missing = _coerce_continuous_data(dataset, False)
+        return _solve_dataset_continuous(root, arr, var_to_col, allow_missing)
+    arr, allow_missing = _coerce_likelihood_data_with_missing(dataset, False)
     return _LLGradContext().solve_dataset(root, arr, var_to_col, allow_missing)
 
 
@@ -382,5 +451,9 @@ def compiled_mean_log_likelihood_and_grad(
     """Mean log-likelihood and gradient (flat nogil path)."""
     cdef cnp.ndarray arr
     cdef bint allow_missing
+    if g.circuit_domain == DOMAIN_CONTINUOUS:
+        return mean_log_likelihood_and_grad(
+            <CircuitNode>g.node_objs[g.root_index], dataset, var_to_col
+        )
     arr, allow_missing = _coerce_likelihood_data_with_missing(dataset, False)
     return _flat_solve_dataset(g, arr, var_to_col, allow_missing)

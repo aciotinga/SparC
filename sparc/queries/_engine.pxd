@@ -38,6 +38,8 @@ cdef class CoupleContext:
     cdef dict cat_grads0
     cdef dict sum_grads1
     cdef dict cat_grads1
+    cdef dict cont_grads0
+    cdef dict cont_grads1
 
     cdef bint memo_get(self, CircuitNode P, CircuitNode Q, double* out) noexcept
     cdef void memo_put(self, CircuitNode P, CircuitNode Q, double val) noexcept
@@ -45,6 +47,7 @@ cdef class CoupleContext:
     cdef size_t append_tape(self, TapeEntry entry, CircuitNode P, CircuitNode Q) except *
     cdef object sum_grad_arr(self, int side, CircuitNode node, size_t n)
     cdef object cat_grad_arr(self, int side, CircuitNode node, size_t n)
+    cdef object cont_grad_arr(self, int side, CircuitNode node, size_t n)
     cdef void run_backward(self) except *
     cdef void reset_base(self)
 

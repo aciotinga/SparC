@@ -35,6 +35,11 @@ Structures accept an optional [`InputDistribution`][sparc.structures.distributio
 | [`Indicator`][sparc.structures.distributions.Indicator] | Deterministic categorical |
 | [`Literal`][sparc.structures.distributions.Literal] | Deterministic boolean |
 | [`DiscreteLogistic`][sparc.structures.distributions.DiscreteLogistic] | Discretized logistic |
+| [`Gaussian`][sparc.structures.distributions.Gaussian] | Univariate $N(\mu,\sigma^2)$ |
+
+`GeneralizedHMM` / `HCLT` / `PD` / `RAT_SPN` take `input_dist=Gaussian(...)`.
+That yields an all-Gaussian-leaf circuit (discrete latents are sum nodes, not
+input nodes), which is allowed under the all-discrete / all-continuous rule.
 
 ```python
 from sparc.structures import GeneralizedHMM, Bernoulli

@@ -6,25 +6,37 @@ be added without editing existing query code.
 ## New leaf type
 
 1. Subclass [`InputNode`][sparc.nodes.InputNode] for likelihood and sampling
-   only, or [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode]
-   to also support CW/GCW/expectation queries.
-2. Override the `cdef` hooks: `prob_c`, `sample_into_c(self, rng, int* out)`, and (for finite
-   discrete) `support_size`, `pmf_at`, `scope_var_c`. Sampling writes `out[scope_var] = value`.
-3. Register cloning in [`node_clone.clone_node`][sparc.node_clone] if you use
+   only, [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode]
+   for discrete CW/GCW/expectation, or
+   [`ContinuousInputNode`][sparc.nodes.ContinuousInputNode] for continuous
+   density / W₂ / inner-product / ESD hooks.
+2. Override the `cdef` hooks. Discrete: `prob_c`, `sample_into_c(self, rng, int* out)`,
+   and (for finite discrete) `support_size`, `pmf_at`, `scope_var_c`. Sampling writes
+   `out[scope_var] = value`. Continuous: `n_params` / `params_into` / `set_params_from`,
+   `log_density_c` / `density_c`, `sample_into_continuous`, plus the query hooks
+   (`cw_w2sq_c`, `inner_product_c`, `esd_c` and backwards). Missing evidence is
+   `-1` (discrete) or `NaN` (continuous).
+3. A DAG is **all-discrete or all-continuous**; mixing the two leaf domains raises.
+4. Register cloning in [`node_clone.clone_node`][sparc.node_clone] if you use
    [`CircuitNode.clone`][sparc.nodes.CircuitNode.clone].
-4. Add serializer support in [`CircuitSerializer`][sparc.io.serializer.CircuitSerializer]
+5. Add serializer support in [`CircuitSerializer`][sparc.io.serializer.CircuitSerializer]
    if you need save/load.
 
 No changes are required in `eval.pyx` or query modules for the object-graph path — dispatch goes through
-the leaf vtable and `node_kind` tags. For the fast path, subclass
+the leaf vtable and `node_kind` tags. For the discrete fast path, subclass
 [`FiniteDiscreteInputNode`][sparc.nodes.FiniteDiscreteInputNode] and implement
 `pmf_at`; then `circuit.compile()` materializes PMFs into flat pools.
+[`GaussianInputNode`][sparc.nodes.GaussianInputNode] compiles into `leaf_param_flat`
+(`[μ, σ]`). Other continuous families need a compile-time leaf kind before they
+get a nogil path.
 
 Hard-forward differentiable sampling additionally requires finite support and
 a consistent cardinality for every occurrence of a variable. Built-in
 `CategoricalInputNode` and `BernoulliInputNode` leaves receive SIMPLE
 leaf-parameter gradients; custom finite-discrete leaves are sampled as fixed
 distributions unless their gradient support is added to the sampling engine.
+Continuous circuits use reparameterization `x = μ + σ ε` and write
+`GradBundle.cont_grads`; they do not pack into `DifferentiableSample.one_hot`.
 
 ## New ground metric
 

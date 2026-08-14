@@ -16,6 +16,7 @@ cdef enum LeafKind:
     LEAF_LITERAL = 3
     LEAF_DISCRETE_LOGISTIC = 4
     LEAF_GENERIC = 5
+    LEAF_GAUSSIAN = 6
 
 
 cdef class CompiledCircuit:
@@ -34,6 +35,9 @@ cdef class CompiledCircuit:
     cdef vector[size_t] leaf_pmf_off
     cdef vector[double] leaf_pmf_flat
     cdef vector[double] leaf_logpmf_flat
+    cdef vector[size_t] leaf_param_off
+    cdef vector[double] leaf_param_flat
+    cdef vector[int] leaf_n_param
 
     # --- scope metadata for flat product-child matching ----------------------
     cdef vector[uint64_t] scope_sig
@@ -47,6 +51,7 @@ cdef class CompiledCircuit:
     cdef size_t n_nodes
     cdef size_t root_index
     cdef int max_var
+    cdef readonly int circuit_domain
     cdef readonly list variables
     cdef object _metric_pools
 
@@ -55,6 +60,7 @@ cdef class CompiledCircuit:
     cdef void _fill_scope(self, CircuitNode node, size_t n) except *
     cdef void _postorder(self, CircuitNode node, dict index_of, list order) except *
     cdef void _refresh_leaf_pmfs(self) except *
+    cdef void _refresh_leaf_params(self) except *
     cdef void _refresh_sum_weights(self) except *
     cdef void _score(
         self,
@@ -65,6 +71,9 @@ cdef class CompiledCircuit:
         bint allow_missing,
     ) except *
     cdef object _likelihood_impl(
+        self, object data, object var_to_col, bint log_space
+    )
+    cdef object _likelihood_impl_continuous(
         self, object data, object var_to_col, bint log_space
     )
 
@@ -80,6 +89,8 @@ cdef cnp.ndarray _coerce_likelihood_data(object data, bint allow_1d) except *
 cdef tuple _coerce_likelihood_data_with_missing(
     object data, bint allow_1d
 ) except *
+
+cdef tuple _coerce_continuous_data(object data, bint allow_1d) except *
 
 cdef void _leaf_column_map(
     CompiledCircuit g,
@@ -115,6 +126,10 @@ cdef double _flat_eval(
 
 cdef void _flat_sample_node(
     CompiledCircuit g, size_t n, RandomState rng, int* out
+) noexcept nogil
+
+cdef void _flat_sample_node_continuous(
+    CompiledCircuit g, size_t n, RandomState rng, double* out
 ) noexcept nogil
 
 

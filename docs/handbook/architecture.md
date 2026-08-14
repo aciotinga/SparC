@@ -41,7 +41,8 @@ flowchart TB
 
 | Path | Role |
 |------|------|
-| `sparc/nodes.pyx` | `CircuitNode` types, inference/query API, leaf vtable |
+| `sparc/nodes.pyx` | `CircuitNode` types, inference/query API, discrete + continuous leaf vtables |
+| `sparc/_continuous.pxd` | Shared nogil Gaussian formulas |
 | `sparc/node_clone.py` | Deep-copy helpers |
 | `sparc/_graph.pyx` | `CompiledCircuit` flattened layout |
 | `sparc/eval.pyx` | Object-graph likelihood / sampling |
@@ -61,7 +62,8 @@ flowchart TB
 2. Object-graph queries walk live nodes with memoization.
 3. `circuit.compile()` flattens the DAG into `CompiledCircuit` once.
 4. Compiled queries use `nogil` numeric cores over CSR arrays; call `refresh_parameters()` after weight updates.
-5. Gradients accumulate into `GradBundle` dicts keyed by `node.id`.
+5. Gradients accumulate into `GradBundle` dicts keyed by `node.id`
+   (`sum_grads`, `cat_grads`, `cont_grads`).
 6. Differentiable samples retain occurrence-indexed hard choices; their VJP
    reduces those occurrences into the same `GradBundle` format.
 

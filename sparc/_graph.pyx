@@ -24,8 +24,11 @@ from sparc.nodes cimport (
     BernoulliInputNode,
     CategoricalInputNode,
     CircuitNode,
+    ContinuousInputNode,
     DiscreteLogisticInputNode,
+    DOMAIN_CONTINUOUS,
     FiniteDiscreteInputNode,
+    GaussianInputNode,
     IndicatorInputNode,
     InputNode,
     InternalNode,
@@ -37,6 +40,7 @@ from sparc.nodes cimport (
     RandomState,
     SumNode,
 )
+from sparc._continuous cimport gaussian_density, gaussian_log_density
 from sparc._mathutils cimport SP_MAX_SUM_FANIN, sp_logsumexp_ptr
 
 
@@ -245,6 +249,19 @@ cdef tuple _coerce_likelihood_data_with_missing(
         return arr, False
     if arr.ndim == 2:
         return arr, False
+    if allow_1d:
+        raise ValueError("data must be 1-D or 2-D (n_samples, n_columns)")
+    raise ValueError("data must be 2-D (n_samples, n_columns)")
+
+
+cdef tuple _coerce_continuous_data(object data, bint allow_1d) except *:
+    if not isinstance(data, np.ndarray):
+        raise TypeError("data must be a numpy.ndarray")
+    cdef cnp.ndarray arr = np.ascontiguousarray(data, dtype=np.float64)
+    if allow_1d and arr.ndim == 1:
+        return arr, True
+    if arr.ndim == 2:
+        return arr, True
     if allow_1d:
         raise ValueError("data must be 1-D or 2-D (n_samples, n_columns)")
     raise ValueError("data must be 2-D (n_samples, n_columns)")
@@ -590,6 +607,102 @@ cdef void _flat_sample_node(
         _flat_sample_node(g, idx, rng, out)
 
 
+cdef void _flat_eval_batch_continuous(
+    CompiledCircuit g,
+    const double[:, ::1] data,
+    const vector[int]& leaf_col,
+    Py_ssize_t n_rows,
+    bint log_space,
+    double[:, ::1] val,
+    double[::1] out,
+) noexcept nogil:
+    cdef size_t n
+    cdef size_t k
+    cdef size_t start
+    cdef size_t stop
+    cdef int kind
+    cdef int col
+    cdef size_t pbase
+    cdef double x
+    cdef double mu
+    cdef double sigma
+    cdef Py_ssize_t r
+    cdef double acc
+    for n in range(g.n_nodes):
+        kind = g.kinds[n]
+        if kind == NODE_INPUT:
+            col = leaf_col[n]
+            pbase = g.leaf_param_off[n]
+            mu = g.leaf_param_flat[pbase]
+            sigma = g.leaf_param_flat[pbase + 1]
+            for r in range(n_rows):
+                x = data[r, col]
+                if x != x:  # NaN
+                    val[n, r] = 0.0 if log_space else 1.0
+                elif log_space:
+                    val[n, r] = gaussian_log_density(x, mu, sigma)
+                else:
+                    val[n, r] = gaussian_density(x, mu, sigma)
+        elif kind == NODE_PRODUCT:
+            start = g.child_off[n]
+            stop = g.child_off[n + 1]
+            if log_space:
+                for r in range(n_rows):
+                    acc = 0.0
+                    for k in range(start, stop):
+                        acc += val[g.children_flat[k], r]
+                    val[n, r] = acc
+            else:
+                for r in range(n_rows):
+                    acc = 1.0
+                    for k in range(start, stop):
+                        acc *= val[g.children_flat[k], r]
+                    val[n, r] = acc
+        else:
+            _flat_eval_sum_node_batch(g, n, n_rows, log_space, val)
+    for r in range(n_rows):
+        out[r] = val[g.root_index, r]
+
+
+cdef void _flat_sample_node_continuous(
+    CompiledCircuit g, size_t n, RandomState rng, double* out
+) noexcept nogil:
+    cdef int kind = g.kinds[n]
+    cdef size_t start
+    cdef size_t stop
+    cdef size_t k
+    cdef size_t idx
+    cdef size_t pbase
+    cdef double u
+    cdef double cum
+    cdef int var
+    cdef double mu
+    cdef double sigma
+    if kind == NODE_INPUT:
+        var = g.leaf_var[n]
+        pbase = g.leaf_param_off[n]
+        mu = g.leaf_param_flat[pbase]
+        sigma = g.leaf_param_flat[pbase + 1]
+        out[var] = mu + sigma * rng.next_normal()
+    elif kind == NODE_PRODUCT:
+        start = g.child_off[n]
+        stop = g.child_off[n + 1]
+        for k in range(start, stop):
+            _flat_sample_node_continuous(g, g.children_flat[k], rng, out)
+    else:
+        start = g.child_off[n]
+        stop = g.child_off[n + 1]
+        u = rng.next_double()
+        cum = 0.0
+        idx = g.children_flat[stop - 1]
+        for k in range(start, stop):
+            cum += g.sum_w_flat[k]
+            if u < cum:
+                idx = g.children_flat[k]
+                break
+        _flat_sample_node_continuous(g, idx, rng, out)
+
+
 cdef class CompiledCircuit:
     """Flattened, cache-friendly circuit for nogil inference.
 
@@ -610,6 +723,7 @@ cdef class CompiledCircuit:
         if r.scope.size() == 0:
             r.propagate_scope()
         self._build(r)
+        self.circuit_domain = r.circuit_domain
         self.variables = sorted(r.scope)
         if self.variables:
             self.max_var = self.variables[len(self.variables) - 1]
@@ -631,6 +745,8 @@ cdef class CompiledCircuit:
         self.leaf_card.assign(self.n_nodes, 0)
         self.leaf_trainable.assign(self.n_nodes, 0)
         self.leaf_pmf_off.assign(self.n_nodes + 1, 0)
+        self.leaf_param_off.assign(self.n_nodes + 1, 0)
+        self.leaf_n_param.assign(self.n_nodes, 0)
         self.node_ids.assign(self.n_nodes, 0)
         self.scope_sig.assign(self.n_nodes, 0)
         self.scope_size.assign(self.n_nodes, 0)
@@ -649,23 +765,21 @@ cdef class CompiledCircuit:
             self.kinds[n] = kind
             self._fill_scope(node, n)
             if kind == NODE_INPUT:
-                if not isinstance(node, FiniteDiscreteInputNode):
-                    raise TypeError(
-                        "CompiledCircuit only supports FiniteDiscreteInputNode "
-                        f"leaves, got {type(node).__name__}"
-                    )
                 self.child_off[n + 1] = 0
                 self._classify_leaf(node, n)
                 support = self.leaf_card[n]
                 self.leaf_pmf_off[n + 1] = <size_t>support
+                self.leaf_param_off[n + 1] = <size_t>self.leaf_n_param[n]
             else:
                 internal = <InternalNode>node
                 self.child_off[n + 1] = internal.num_children()
                 self.leaf_pmf_off[n + 1] = 0
+                self.leaf_param_off[n + 1] = 0
 
         for n in range(self.n_nodes):
             self.child_off[n + 1] += self.child_off[n]
             self.leaf_pmf_off[n + 1] += self.leaf_pmf_off[n]
+            self.leaf_param_off[n + 1] += self.leaf_param_off[n]
             self.scope_vars_off[n + 1] += self.scope_vars_off[n]
 
         self.children_flat.assign(self.child_off[self.n_nodes], 0)
@@ -673,6 +787,7 @@ cdef class CompiledCircuit:
         self.sum_logw_flat.assign(self.child_off[self.n_nodes], 0.0)
         self.leaf_pmf_flat.assign(self.leaf_pmf_off[self.n_nodes], 0.0)
         self.leaf_logpmf_flat.assign(self.leaf_pmf_off[self.n_nodes], 0.0)
+        self.leaf_param_flat.assign(self.leaf_param_off[self.n_nodes], 0.0)
 
         cdef size_t base
         cdef size_t lbase
@@ -680,9 +795,12 @@ cdef class CompiledCircuit:
         cdef size_t k
         cdef SumNode s
         cdef FiniteDiscreteInputNode leaf
+        cdef ContinuousInputNode cont
         cdef double pmf
         cdef int v
         cdef unordered_set[int].iterator sit
+        cdef size_t pbase
+        cdef size_t pn
 
         self.scope_vars_flat.assign(self.scope_vars_off[self.n_nodes], 0)
         for n in range(self.n_nodes):
@@ -695,12 +813,19 @@ cdef class CompiledCircuit:
         for n in range(self.n_nodes):
             node = <CircuitNode>order[n]
             if node.node_kind == NODE_INPUT:
-                leaf = <FiniteDiscreteInputNode>node
-                lbase = self.leaf_pmf_off[n]
-                for k in range(<size_t>self.leaf_card[n]):
-                    pmf = leaf.pmf_at(k)
-                    self.leaf_pmf_flat[lbase + k] = pmf
-                    self.leaf_logpmf_flat[lbase + k] = graph_safe_log(pmf)
+                if isinstance(node, FiniteDiscreteInputNode):
+                    leaf = <FiniteDiscreteInputNode>node
+                    lbase = self.leaf_pmf_off[n]
+                    for k in range(<size_t>self.leaf_card[n]):
+                        pmf = leaf.pmf_at(k)
+                        self.leaf_pmf_flat[lbase + k] = pmf
+                        self.leaf_logpmf_flat[lbase + k] = graph_safe_log(pmf)
+                elif isinstance(node, ContinuousInputNode):
+                    cont = <ContinuousInputNode>node
+                    pbase = self.leaf_param_off[n]
+                    pn = <size_t>self.leaf_n_param[n]
+                    if pn > 0:
+                        cont.params_into(&self.leaf_param_flat[pbase])
             else:
                 internal = <InternalNode>node
                 base = self.child_off[n]
@@ -719,7 +844,22 @@ cdef class CompiledCircuit:
         self.scope_vars_off[n + 1] = <size_t>node.scope.size()
 
     cdef void _classify_leaf(self, CircuitNode node, size_t n) except *:
-        cdef FiniteDiscreteInputNode leaf = <FiniteDiscreteInputNode>node
+        cdef FiniteDiscreteInputNode leaf
+        cdef ContinuousInputNode cont
+        if isinstance(node, GaussianInputNode):
+            cont = <ContinuousInputNode>node
+            self.leaf_kind[n] = LEAF_GAUSSIAN
+            self.leaf_trainable[n] = 1
+            self.leaf_var[n] = cont.scope_var_c()
+            self.leaf_card[n] = 0
+            self.leaf_n_param[n] = <int>cont.n_params()
+            return
+        if not isinstance(node, FiniteDiscreteInputNode):
+            raise TypeError(
+                "CompiledCircuit only supports FiniteDiscreteInputNode or "
+                f"GaussianInputNode leaves, got {type(node).__name__}"
+            )
+        leaf = <FiniteDiscreteInputNode>node
         if isinstance(node, CategoricalInputNode):
             self.leaf_kind[n] = LEAF_CATEGORICAL
             self.leaf_trainable[n] = 1
@@ -734,10 +874,10 @@ cdef class CompiledCircuit:
             self.leaf_kind[n] = LEAF_DISCRETE_LOGISTIC
         else:
             self.leaf_kind[n] = LEAF_GENERIC
-            if isinstance(node, FiniteDiscreteInputNode):
-                self.leaf_trainable[n] = 1
+            self.leaf_trainable[n] = 1
         self.leaf_var[n] = leaf.scope_var_c()
         self.leaf_card[n] = <int>leaf.support_size()
+        self.leaf_n_param[n] = 0
 
     cdef void _postorder(self, CircuitNode node, dict index_of, list order) except *:
         if node.id in index_of:
@@ -752,11 +892,20 @@ cdef class CompiledCircuit:
         index_of[node.id] = len(order) - 1
 
     def refresh_parameters(self):
-        """Re-copy sum weights and leaf PMFs from live nodes after an update."""
+        """Re-copy sum weights and leaf parameters from live nodes after an update."""
         cdef size_t n
         cdef FiniteDiscreteInputNode leaf
+        cdef ContinuousInputNode cont
         for n in range(self.n_nodes):
             if self.kinds[n] != NODE_INPUT:
+                continue
+            if self.leaf_kind[n] == LEAF_GAUSSIAN:
+                cont = <ContinuousInputNode>self.node_objs[n]
+                if cont.n_params() != <size_t>self.leaf_n_param[n]:
+                    raise ValueError(
+                        f"leaf node {self.node_ids[n]} changed parameter count; "
+                        "recompile the circuit"
+                    )
                 continue
             leaf = <FiniteDiscreteInputNode>self.node_objs[n]
             if leaf.support_size() != <size_t>self.leaf_card[n]:
@@ -766,6 +915,7 @@ cdef class CompiledCircuit:
                 )
         self._refresh_sum_weights()
         self._refresh_leaf_pmfs()
+        self._refresh_leaf_params()
 
     def build_metric_pools(self, metric):
         """Precompute per-leaf pairwise cost matrices for *metric* (GIL setup).
@@ -782,8 +932,10 @@ cdef class CompiledCircuit:
         for n in range(self.n_nodes):
             if self.kinds[n] != NODE_INPUT:
                 continue
-            var = self.leaf_var[n]
             card = self.leaf_card[n]
+            if card <= 0:
+                continue
+            var = self.leaf_var[n]
             key = ("pairwise", var, card)
             if key not in pools:
                 metric.pairwise(var, <size_t>card, tmp)
@@ -816,6 +968,8 @@ cdef class CompiledCircuit:
         for n in range(self.n_nodes):
             if self.kinds[n] != NODE_INPUT:
                 continue
+            if self.leaf_kind[n] == LEAF_GAUSSIAN:
+                continue
             leaf = <FiniteDiscreteInputNode>self.node_objs[n]
             if leaf.support_size() != <size_t>self.leaf_card[n]:
                 raise ValueError(
@@ -827,6 +981,20 @@ cdef class CompiledCircuit:
                 pmf = leaf.pmf_at(k)
                 self.leaf_pmf_flat[lbase + k] = pmf
                 self.leaf_logpmf_flat[lbase + k] = graph_safe_log(pmf)
+
+    cdef void _refresh_leaf_params(self) except *:
+        cdef size_t n
+        cdef size_t pbase
+        cdef size_t pn
+        cdef ContinuousInputNode cont
+        for n in range(self.n_nodes):
+            if self.kinds[n] != NODE_INPUT or self.leaf_kind[n] != LEAF_GAUSSIAN:
+                continue
+            cont = <ContinuousInputNode>self.node_objs[n]
+            pbase = self.leaf_param_off[n]
+            pn = <size_t>self.leaf_n_param[n]
+            if pn > 0:
+                cont.params_into(&self.leaf_param_flat[pbase])
 
     def log_likelihood(self, object data, object var_to_col=None):
         """Log-likelihood for a 1-D or 2-D integer assignment array."""
@@ -841,6 +1009,8 @@ cdef class CompiledCircuit:
     ):
         cdef cnp.ndarray arr
         cdef bint allow_missing
+        if self.circuit_domain == DOMAIN_CONTINUOUS:
+            return self._likelihood_impl_continuous(data, var_to_col, log_space)
         arr, allow_missing = _coerce_likelihood_data_with_missing(data, True)
         cdef vector[int] leaf_col
         cdef Py_ssize_t n_rows
@@ -866,6 +1036,39 @@ cdef class CompiledCircuit:
         out_view = out
         data_view = arr
         self._score(data_view, leaf_col, out_view, log_space, allow_missing)
+        return out
+
+    cdef object _likelihood_impl_continuous(
+        self, object data, object var_to_col, bint log_space
+    ):
+        cdef cnp.ndarray arr
+        cdef bint allow_missing
+        cdef vector[int] leaf_col
+        cdef Py_ssize_t n_rows
+        cdef object out
+        cdef double[::1] out_view
+        cdef const double[:, ::1] data_view
+        cdef object val_arr
+        cdef double[:, ::1] val_view
+        cdef object work
+        arr, allow_missing = _coerce_continuous_data(data, True)
+        if arr.ndim == 1:
+            work = np.ascontiguousarray(arr[None, :], dtype=np.float64)
+        else:
+            work = arr
+        n_rows = work.shape[0]
+        _leaf_column_map(self, var_to_col, work.shape[1], leaf_col)
+        out = np.empty(n_rows, dtype=np.float64)
+        out_view = out
+        data_view = work
+        val_arr = np.empty((self.n_nodes, n_rows), dtype=np.float64)
+        val_view = val_arr
+        with nogil:
+            _flat_eval_batch_continuous(
+                self, data_view, leaf_col, n_rows, log_space, val_view, out_view
+            )
+        if arr.ndim == 1:
+            return float(out[0])
         return out
 
     cdef void _score(
@@ -896,6 +1099,9 @@ cdef class CompiledCircuit:
         if n_samples < 0:
             raise ValueError("n_samples must be non-negative")
         if differentiable:
+            if self.circuit_domain == DOMAIN_CONTINUOUS:
+                from sparc.sampling import sample_compiled_differentiable_continuous
+                return sample_compiled_differentiable_continuous(self, n_samples, seed)
             from sparc.sampling import sample_compiled_differentiable
             return sample_compiled_differentiable(self, n_samples, seed)
         cdef unsigned long long rng_seed
@@ -905,10 +1111,23 @@ cdef class CompiledCircuit:
             rng_seed = <unsigned long long>int(seed)
         cdef RandomState rng = RandomState(rng_seed)
         cdef size_t width = <size_t>(self.max_var + 1)
-        cdef object out = np.full((n_samples, width), -1, dtype=np.int32)
-        cdef int[:, ::1] out_view = out
         cdef Py_ssize_t i
         cdef size_t root_index = self.root_index
+        cdef object out
+        cdef double[:, ::1] cout_view
+        cdef int[:, ::1] out_view
+        if self.circuit_domain == DOMAIN_CONTINUOUS:
+            out = np.full((n_samples, width), np.nan, dtype=np.float64)
+            cout_view = out
+            if n_samples > 0:
+                with nogil:
+                    for i in range(n_samples):
+                        _flat_sample_node_continuous(
+                            self, root_index, rng, &cout_view[i, 0]
+                        )
+            return out
+        out = np.full((n_samples, width), -1, dtype=np.int32)
+        out_view = out
         if n_samples > 0:
             with nogil:
                 for i in range(n_samples):

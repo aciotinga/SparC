@@ -24,7 +24,7 @@ Documentation: [https://sparc-docs.readthedocs.io](https://sparc-docs.readthedoc
 
 | Query | Math | Gradients w.r.t. | Docs |
 |-------|------|------------------|------|
-| CW | $W_p^p$ (Circuit-Wasserstein objective) | circuit2 | [queries](docs/guides/queries.md) |
+| CW | $W_p^p$ (discrete) / Euclidean $W_2^2$ (continuous) | circuit2 | [queries](docs/guides/queries.md) |
 | GCW cross-term | Gromov-Circuit-Wasserstein cross-term | circuit2 | [queries](docs/guides/queries.md) |
 | Expectation | $E_Q[P(X)]$ | both circuits | [queries](docs/guides/queries.md) |
 | Log expectation | $\log E_Q[P(X)]$ | both circuits | [queries](docs/guides/queries.md) |
@@ -96,6 +96,12 @@ grads = draws.vjp(np.ones_like(draws.one_hot))
 
 data = np.random.randint(0, 2, size=(1000, 2)).astype(np.int32)
 circuit.compile().log_likelihood(data)
+
+# Continuous circuits (Gaussian leaves; no mixing with discrete leaves)
+from sparc import GaussianInputNode
+
+g = GaussianInputNode(scope_var=0, mu=0.0, sigma=1.0)
+g.log_likelihood(np.array([0.2]))
 ```
 
 ### Training

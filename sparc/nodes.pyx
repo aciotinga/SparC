@@ -3,12 +3,10 @@
 """Core circuit node types for SparC.
 
 The node layer is built for *extensibility through C-level virtual dispatch*:
-``InputNode`` exposes a tiny ``cdef`` vtable (``prob_c`` / ``sample_into_c``) and
-``FiniteDiscreteInputNode`` extends it with the discrete-support interface that
-Wasserstein and expectation queries need (``support_size`` / ``pmf_at`` /
-``scope_var_c``). A new leaf distribution is added by subclassing one of those
-and overriding a couple of ``cdef`` methods -- no query, eval, or builder code
-needs to change.
+``InputNode`` exposes a tiny ``cdef`` vtable (``prob_c`` / ``sample_into_c``),
+``FiniteDiscreteInputNode`` adds the discrete-support interface, and
+``ContinuousInputNode`` adds density / closed-form query hooks. A circuit is
+all-discrete or all-continuous; mixing the two leaf domains is rejected.
 """
 
 from cpython.ref cimport PyObject
@@ -18,12 +16,26 @@ from libcpp.random cimport mt19937_64, uniform_real_distribution
 from libcpp.unordered_set cimport unordered_set
 from libcpp.utility cimport pair
 from libcpp.vector cimport vector
-from libc.math cimport exp, fabs, isfinite
+from libc.math cimport NAN, exp, fabs, isfinite, log, sqrt
+
+from sparc._continuous cimport (
+    gaussian_density,
+    gaussian_esd,
+    gaussian_esd_dsigma,
+    gaussian_inner_product,
+    gaussian_inner_product_grad,
+    gaussian_log_density,
+    gaussian_log_inner_product,
+    gaussian_log_inner_product_grad,
+    gaussian_w2sq,
+    gaussian_w2sq_grad,
+)
 
 import numpy as np
 cimport numpy as cnp
 
 cdef double PROB_TOL = 1e-6
+cdef double SIGMA_FLOOR = 1e-12
 
 
 cdef inline double _sigmoid(double x) noexcept:
@@ -106,9 +118,30 @@ cdef class RandomState:
 
     def __cinit__(self, unsigned long long seed):
         self.rng = mt19937_64(seed)
+        self.has_spare = False
+        self.spare = 0.0
 
     cdef inline double next_double(self) noexcept nogil:
         return self.dist(self.rng)
+
+    cdef double next_normal(self) noexcept nogil:
+        cdef double u
+        cdef double v
+        cdef double s
+        cdef double mul
+        if self.has_spare:
+            self.has_spare = False
+            return self.spare
+        while True:
+            u = 2.0 * self.next_double() - 1.0
+            v = 2.0 * self.next_double() - 1.0
+            s = u * u + v * v
+            if s > 0.0 and s < 1.0:
+                break
+        mul = sqrt(-2.0 * log(s) / s)
+        self.spare = v * mul
+        self.has_spare = True
+        return u * mul
 
 
 # --- Evidence -----------------------------------------------------------------
@@ -161,12 +194,51 @@ cdef class Evidence:
             )
 
 
+# --- Continuous evidence ------------------------------------------------------
+
+cdef class ContinuousEvidence:
+    """Dense float evidence; NaN marks a marginalized (missing) variable."""
+
+    def __init__(self, cnp.ndarray row not None):
+        if row.ndim != 1:
+            raise ValueError("Evidence array must be 1-D")
+        cdef Py_ssize_t i
+        cdef double val
+        self._buf.resize(<size_t>row.shape[0])
+        for i in range(row.shape[0]):
+            val = float(row[i])
+            self._buf[<size_t>i] = val
+
+    cdef void init_dense(self, int width) except *:
+        if width < 0:
+            raise ValueError(f"evidence width must be non-negative, got {width}")
+        self._buf.assign(<size_t>width, NAN)
+
+    cdef void set_var(self, int var, double value) noexcept:
+        if var >= 0 and <size_t>var < self._buf.size():
+            self._buf[<size_t>var] = value
+
+    cdef double get(self, int var) except *:
+        if var < 0 or <size_t>var >= self._buf.size():
+            raise ValueError(f"missing evidence for variable {var}")
+        cdef double val = self._buf[<size_t>var]
+        if not isfinite(val):
+            raise ValueError(f"missing evidence for variable {var}")
+        return val
+
+    cdef inline bint has(self, int var) noexcept:
+        if var < 0 or <size_t>var >= self._buf.size():
+            return False
+        return isfinite(self._buf[<size_t>var])
+
+
 # --- Base node ----------------------------------------------------------------
 
 cdef class CircuitNode:
     def __init__(self, size_t id):
         self.id = id
         self.node_kind = -1
+        self.circuit_domain = DOMAIN_UNSET
         self.scope.clear()
 
     cdef void _propagate_scope_impl(self, unordered_set[size_t]& visited) except *:
@@ -338,6 +410,29 @@ cdef void fill_children(
         ptrs.push_back(<PyObject*>child)
 
 
+cdef void _set_domain_from_children(InternalNode node) except *:
+    cdef size_t i
+    cdef size_t n = node.num_children()
+    cdef CircuitNode child
+    cdef int d
+    if n == 0:
+        raise ValueError("internal node must have at least one child")
+    child = node.child_at(0)
+    d = child.circuit_domain
+    if d == DOMAIN_UNSET:
+        raise ValueError(
+            f"child {child.id} has unset circuit domain; leaves must declare "
+            "discrete or continuous"
+        )
+    for i in range(1, n):
+        child = node.child_at(i)
+        if child.circuit_domain != d:
+            raise ValueError(
+                "cannot mix discrete and continuous input nodes in one circuit"
+            )
+    node.circuit_domain = d
+
+
 # --- Internal nodes -----------------------------------------------------------
 
 cdef class InternalNode(CircuitNode):
@@ -393,6 +488,7 @@ cdef class SumNode(InternalNode):
                 f"{len(children)} vs {len(parameters)}"
             )
         fill_children(self._children, self._child_refs, children)
+        _set_domain_from_children(self)
         fill_vector_double(self.parameters, parameters)
         validate_probabilities(self.parameters, True)
 
@@ -438,6 +534,7 @@ cdef class ProductNode(InternalNode):
         if len(children) < 1:
             raise ValueError("ProductNode must have at least one child")
         fill_children(self._children, self._child_refs, children)
+        _set_domain_from_children(self)
 
 
 # --- Leaf nodes ---------------------------------------------------------------
@@ -531,6 +628,7 @@ cdef class CategoricalInputNode(FiniteDiscreteInputNode):
         cdef size_t node_id = _resolve_node_id(id)
         CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_INPUT
+        self.circuit_domain = DOMAIN_DISCRETE
         self.scope.clear()
         self.scope.insert(scope_var)
         fill_vector_double(self.probabilities, probabilities)
@@ -578,6 +676,7 @@ cdef class BernoulliInputNode(FiniteDiscreteInputNode):
         cdef size_t node_id = _resolve_node_id(id)
         CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_INPUT
+        self.circuit_domain = DOMAIN_DISCRETE
         self.scope.clear()
         self.scope.insert(scope_var)
         self.probabilities.clear()
@@ -628,6 +727,7 @@ cdef class IndicatorInputNode(FiniteDiscreteInputNode):
         cdef size_t node_id = _resolve_node_id(id)
         CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_INPUT
+        self.circuit_domain = DOMAIN_DISCRETE
         self.scope.clear()
         self.scope.insert(scope_var)
         self.value = value
@@ -662,6 +762,7 @@ cdef class LiteralInputNode(FiniteDiscreteInputNode):
         cdef size_t node_id = _resolve_node_id(id)
         CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_INPUT
+        self.circuit_domain = DOMAIN_DISCRETE
         self.scope.clear()
         self.scope.insert(scope_var)
         self.value = v
@@ -708,6 +809,7 @@ cdef class DiscreteLogisticInputNode(FiniteDiscreteInputNode):
         cdef size_t node_id = _resolve_node_id(id)
         CircuitNode.__init__(self, node_id)
         self.node_kind = NODE_INPUT
+        self.circuit_domain = DOMAIN_DISCRETE
         self.scope.clear()
         self.scope.insert(scope_var)
         self.mu = mu
@@ -742,3 +844,315 @@ cdef class DiscreteLogisticInputNode(FiniteDiscreteInputNode):
 
     cpdef Py_ssize_t num_categories(self):
         return <Py_ssize_t>self.num_cats
+
+
+cdef class ContinuousInputNode(InputNode):
+    """Base continuous leaf. Subclasses override density / query hooks."""
+
+    cdef int scope_var_c(self) except *:
+        cdef int v
+        if self.scope.size() != 1:
+            raise ValueError(
+                f"{type(self).__name__} {self.id} must have scope of size 1"
+            )
+        for v in sorted(self.scope):
+            return v
+        raise ValueError(f"{type(self).__name__} {self.id} has empty scope")
+
+    cdef size_t n_params(self) noexcept:
+        return 0
+
+    cdef void params_into(self, double* out) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement params_into"
+        )
+
+    cdef void set_params_from(self, const double* src, size_t n) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement set_params_from"
+        )
+
+    cdef double log_density_c(self, ContinuousEvidence ev) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement log_density_c"
+        )
+
+    cdef double density_c(self, ContinuousEvidence ev) except *:
+        cdef double lp = self.log_density_c(ev)
+        if not isfinite(lp):
+            return 0.0
+        return exp(lp)
+
+    cdef void sample_into_continuous(self, RandomState rng, double* out) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement sample_into_continuous"
+        )
+
+    cdef void log_density_backward_c(
+        self, ContinuousEvidence ev, double g, double* g_self
+    ) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement log_density_backward_c"
+        )
+
+    cdef double cw_w2sq_c(self, ContinuousInputNode other, double scale) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement cw_w2sq_c"
+        )
+
+    cdef void cw_w2sq_backward_c(
+        self, ContinuousInputNode other, double scale, double g,
+        double* g_self, double* g_other,
+    ) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement cw_w2sq_backward_c"
+        )
+
+    cdef double inner_product_c(self, ContinuousInputNode other) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement inner_product_c"
+        )
+
+    cdef void inner_product_backward_c(
+        self, ContinuousInputNode other, double g,
+        double* g_self, double* g_other,
+    ) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement inner_product_backward_c"
+        )
+
+    cdef double log_inner_product_c(self, ContinuousInputNode other) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement log_inner_product_c"
+        )
+
+    cdef void log_inner_product_backward_c(
+        self, ContinuousInputNode other, double g,
+        double* g_self, double* g_other,
+    ) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement log_inner_product_backward_c"
+        )
+
+    cdef double esd_c(self, double scale) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement esd_c"
+        )
+
+    cdef void esd_backward_c(self, double scale, double g, double* g_self) except *:
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement esd_backward_c"
+        )
+
+    cpdef list parameters_list(self):
+        cdef size_t n = self.n_params()
+        cdef size_t i
+        cdef vector[double] buf
+        cdef list out = []
+        buf.resize(n)
+        if n > 0:
+            self.params_into(buf.data())
+        for i in range(n):
+            out.append(buf[i])
+        return out
+
+    cpdef void set_params_list(self, object params) except *:
+        cdef vector[double] buf
+        fill_vector_double(buf, params)
+        self.set_params_from(buf.data(), buf.size())
+
+
+cdef class GaussianInputNode(ContinuousInputNode):
+    """Univariate Gaussian leaf :math:`N(\\mu, \\sigma^2)`.
+
+    Args:
+        scope_var: Variable index (non-negative integer).
+        mu: Location.
+        sigma: Positive standard deviation.
+        id: Optional unique node identifier (auto-assigned when omitted).
+    """
+
+    def __init__(self, int scope_var, double mu=0.0, double sigma=1.0, *, object id=None):
+        if scope_var < 0:
+            raise ValueError(f"scope_var must be non-negative, got {scope_var}")
+        if not isfinite(mu):
+            raise ValueError("gaussian mu must be finite")
+        if not isfinite(sigma) or sigma <= 0.0:
+            raise ValueError(f"gaussian sigma must be positive, got {sigma}")
+        cdef size_t node_id = _resolve_node_id(id)
+        CircuitNode.__init__(self, node_id)
+        self.node_kind = NODE_INPUT
+        self.circuit_domain = DOMAIN_CONTINUOUS
+        self.scope.clear()
+        self.scope.insert(scope_var)
+        self.mu = mu
+        self.sigma = sigma
+
+    cdef inline size_t n_params(self) noexcept:
+        return 2
+
+    cdef void params_into(self, double* out) except *:
+        out[0] = self.mu
+        out[1] = self.sigma
+
+    cdef void set_params_from(self, const double* src, size_t n) except *:
+        if n != 2:
+            raise ValueError(f"gaussian expects 2 parameters, got {n}")
+        if not isfinite(src[0]):
+            raise ValueError("gaussian mu must be finite")
+        if not isfinite(src[1]) or src[1] <= 0.0:
+            raise ValueError(f"gaussian sigma must be positive, got {src[1]}")
+        self.mu = src[0]
+        self.sigma = src[1]
+
+    cdef double log_density_c(self, ContinuousEvidence ev) except *:
+        cdef int var = self.scope_var_c()
+        if not ev.has(var):
+            return 0.0
+        return gaussian_log_density(ev.get(var), self.mu, self.sigma)
+
+    cdef double density_c(self, ContinuousEvidence ev) except *:
+        cdef int var = self.scope_var_c()
+        if not ev.has(var):
+            return 1.0
+        return gaussian_density(ev.get(var), self.mu, self.sigma)
+
+    cdef void sample_into_continuous(self, RandomState rng, double* out) except *:
+        cdef int var = self.scope_var_c()
+        out[var] = self.mu + self.sigma * rng.next_normal()
+
+    cdef void log_density_backward_c(
+        self, ContinuousEvidence ev, double g, double* g_self
+    ) except *:
+        cdef int var = self.scope_var_c()
+        cdef double x
+        cdef double z
+        if not ev.has(var):
+            g_self[0] = 0.0
+            g_self[1] = 0.0
+            return
+        x = ev.get(var)
+        z = x - self.mu
+        g_self[0] = g * z / (self.sigma * self.sigma)
+        g_self[1] = g * (-1.0 / self.sigma + z * z / (self.sigma * self.sigma * self.sigma))
+
+    cdef double cw_w2sq_c(self, ContinuousInputNode other, double scale) except *:
+        cdef GaussianInputNode g
+        if not isinstance(other, GaussianInputNode):
+            raise TypeError(
+                "incompatible continuous leaves: "
+                f"{type(self).__name__} vs {type(other).__name__}"
+            )
+        if scale <= 0.0:
+            raise ValueError("scale must be positive")
+        g = <GaussianInputNode>other
+        return gaussian_w2sq(self.mu, self.sigma, g.mu, g.sigma, scale)
+
+    cdef void cw_w2sq_backward_c(
+        self, ContinuousInputNode other, double scale, double g,
+        double* g_self, double* g_other,
+    ) except *:
+        cdef GaussianInputNode o
+        cdef double dmu1, ds1, dmu2, ds2
+        if not isinstance(other, GaussianInputNode):
+            raise TypeError(
+                "incompatible continuous leaves: "
+                f"{type(self).__name__} vs {type(other).__name__}"
+            )
+        o = <GaussianInputNode>other
+        gaussian_w2sq_grad(
+            self.mu, self.sigma, o.mu, o.sigma, scale, g,
+            &dmu1, &ds1, &dmu2, &ds2,
+        )
+        g_self[0] = dmu1
+        g_self[1] = ds1
+        g_other[0] = dmu2
+        g_other[1] = ds2
+
+    cdef double inner_product_c(self, ContinuousInputNode other) except *:
+        cdef GaussianInputNode g
+        if not isinstance(other, GaussianInputNode):
+            raise TypeError(
+                "incompatible continuous leaves: "
+                f"{type(self).__name__} vs {type(other).__name__}"
+            )
+        g = <GaussianInputNode>other
+        return gaussian_inner_product(self.mu, self.sigma, g.mu, g.sigma)
+
+    cdef void inner_product_backward_c(
+        self, ContinuousInputNode other, double g,
+        double* g_self, double* g_other,
+    ) except *:
+        cdef GaussianInputNode o
+        cdef double dmu1, ds1, dmu2, ds2
+        if not isinstance(other, GaussianInputNode):
+            raise TypeError(
+                "incompatible continuous leaves: "
+                f"{type(self).__name__} vs {type(other).__name__}"
+            )
+        o = <GaussianInputNode>other
+        gaussian_inner_product_grad(
+            self.mu, self.sigma, o.mu, o.sigma, g,
+            &dmu1, &ds1, &dmu2, &ds2,
+        )
+        g_self[0] = dmu1
+        g_self[1] = ds1
+        g_other[0] = dmu2
+        g_other[1] = ds2
+
+    cdef double log_inner_product_c(self, ContinuousInputNode other) except *:
+        cdef GaussianInputNode g
+        if not isinstance(other, GaussianInputNode):
+            raise TypeError(
+                "incompatible continuous leaves: "
+                f"{type(self).__name__} vs {type(other).__name__}"
+            )
+        g = <GaussianInputNode>other
+        return gaussian_log_inner_product(self.mu, self.sigma, g.mu, g.sigma)
+
+    cdef void log_inner_product_backward_c(
+        self, ContinuousInputNode other, double g,
+        double* g_self, double* g_other,
+    ) except *:
+        cdef GaussianInputNode o
+        cdef double dmu1, ds1, dmu2, ds2
+        if not isinstance(other, GaussianInputNode):
+            raise TypeError(
+                "incompatible continuous leaves: "
+                f"{type(self).__name__} vs {type(other).__name__}"
+            )
+        o = <GaussianInputNode>other
+        gaussian_log_inner_product_grad(
+            self.mu, self.sigma, o.mu, o.sigma, g,
+            &dmu1, &ds1, &dmu2, &ds2,
+        )
+        g_self[0] = dmu1
+        g_self[1] = ds1
+        g_other[0] = dmu2
+        g_other[1] = ds2
+
+    cdef double esd_c(self, double scale) except *:
+        if scale <= 0.0:
+            raise ValueError("scale must be positive")
+        return gaussian_esd(self.sigma, scale)
+
+    cdef void esd_backward_c(self, double scale, double g, double* g_self) except *:
+        g_self[0] = 0.0
+        g_self[1] = gaussian_esd_dsigma(self.sigma, scale, g)
+
+    cpdef double mu_value(self):
+        return self.mu
+
+    cpdef double sigma_value(self):
+        return self.sigma
+
+    cpdef void set_mu(self, double mu) except *:
+        if not isfinite(mu):
+            raise ValueError("gaussian mu must be finite")
+        self.mu = mu
+
+    cpdef void set_sigma(self, double sigma) except *:
+        if not isfinite(sigma) or sigma <= 0.0:
+            raise ValueError(f"gaussian sigma must be positive, got {sigma}")
+        self.sigma = sigma
+

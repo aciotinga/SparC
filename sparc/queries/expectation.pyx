@@ -21,6 +21,8 @@ from sparc._mathutils cimport sp_safe_log
 from sparc.grad cimport GradBundle
 from sparc.nodes cimport (
     CircuitNode,
+    ContinuousInputNode,
+    DOMAIN_CONTINUOUS,
     FiniteDiscreteInputNode,
     NODE_INPUT,
     NODE_PRODUCT,
@@ -95,6 +97,50 @@ cdef class _ExpLeaf(TapeEntry):
         for k in range(self.n):
             gp[k] += g * Q.pmf_at(k)
             gq[k] += g * P.pmf_at(k)
+
+
+cdef class _ExpContLeaf(TapeEntry):
+    cdef void backward(self, object ctx, double g) except *:
+        cdef CoupleContext c = <CoupleContext>ctx
+        cdef ContinuousInputNode P = <ContinuousInputNode>self.P
+        cdef ContinuousInputNode Q = <ContinuousInputNode>self.Q
+        cdef size_t np = P.n_params()
+        cdef size_t nq = Q.n_params()
+        cdef vector[double] gs
+        cdef vector[double] go
+        cdef object arr
+        cdef size_t k
+        gs.resize(np)
+        go.resize(nq)
+        P.inner_product_backward_c(Q, g, gs.data(), go.data())
+        arr = c.cont_grad_arr(0, P, np)
+        for k in range(np):
+            arr[k] += gs[k]
+        arr = c.cont_grad_arr(1, Q, nq)
+        for k in range(nq):
+            arr[k] += go[k]
+
+
+cdef class _LogExpContLeaf(TapeEntry):
+    cdef void backward(self, object ctx, double g) except *:
+        cdef CoupleContext c = <CoupleContext>ctx
+        cdef ContinuousInputNode P = <ContinuousInputNode>self.P
+        cdef ContinuousInputNode Q = <ContinuousInputNode>self.Q
+        cdef size_t np = P.n_params()
+        cdef size_t nq = Q.n_params()
+        cdef vector[double] gs
+        cdef vector[double] go
+        cdef object arr
+        cdef size_t k
+        gs.resize(np)
+        go.resize(nq)
+        P.log_inner_product_backward_c(Q, g, gs.data(), go.data())
+        arr = c.cont_grad_arr(0, P, np)
+        for k in range(np):
+            arr[k] += gs[k]
+        arr = c.cont_grad_arr(1, Q, nq)
+        for k in range(nq):
+            arr[k] += go[k]
 
 
 cdef class _ExpSumSum(TapeEntry):
@@ -175,7 +221,12 @@ cdef class ExpectationContext(CoupleContext):
         if self.memo_get(P, Q, &cached):
             return cached
         if P.node_kind == NODE_INPUT and Q.node_kind == NODE_INPUT:
-            res = self._leaf(<FiniteDiscreteInputNode>P, <FiniteDiscreteInputNode>Q, sP, sQ)
+            if P.circuit_domain == DOMAIN_CONTINUOUS:
+                res = self._cont_leaf(
+                    <ContinuousInputNode>P, <ContinuousInputNode>Q, sP, sQ
+                )
+            else:
+                res = self._leaf(<FiniteDiscreteInputNode>P, <FiniteDiscreteInputNode>Q, sP, sQ)
         elif P.node_kind == NODE_SUM and Q.node_kind == NODE_SUM:
             res = self._sum_sum(<SumNode>P, <SumNode>Q, sP, sQ)
         elif P.node_kind == NODE_PRODUCT and Q.node_kind == NODE_PRODUCT:
@@ -187,6 +238,21 @@ cdef class ExpectationContext(CoupleContext):
             )
         self.memo_put(P, Q, res)
         return res
+
+    cdef double _cont_leaf(
+        self, ContinuousInputNode P, ContinuousInputNode Q, int sP, int sQ
+    ) except *:
+        cdef double total
+        cdef _ExpContLeaf entry
+        total = P.inner_product_c(Q)
+        if self.recording:
+            entry = _ExpContLeaf()
+            entry.side_P = sP
+            entry.side_Q = sQ
+            entry.P = P
+            entry.Q = Q
+            self.append_tape(entry, P, Q)
+        return total
 
     cdef double _leaf(self, FiniteDiscreteInputNode P, FiniteDiscreteInputNode Q, int sP, int sQ) except *:
         _check_leaf_compat(P, Q)
@@ -379,7 +445,12 @@ cdef class LogExpectationContext(CoupleContext):
         if self.memo_get(P, Q, &cached):
             return cached
         if P.node_kind == NODE_INPUT and Q.node_kind == NODE_INPUT:
-            res = self._leaf(<FiniteDiscreteInputNode>P, <FiniteDiscreteInputNode>Q, sP, sQ)
+            if P.circuit_domain == DOMAIN_CONTINUOUS:
+                res = self._cont_leaf(
+                    <ContinuousInputNode>P, <ContinuousInputNode>Q, sP, sQ
+                )
+            else:
+                res = self._leaf(<FiniteDiscreteInputNode>P, <FiniteDiscreteInputNode>Q, sP, sQ)
         elif P.node_kind == NODE_SUM and Q.node_kind == NODE_SUM:
             res = self._sum_sum(<SumNode>P, <SumNode>Q, sP, sQ)
         elif P.node_kind == NODE_PRODUCT and Q.node_kind == NODE_PRODUCT:
@@ -391,6 +462,21 @@ cdef class LogExpectationContext(CoupleContext):
             )
         self.memo_put(P, Q, res)
         return res
+
+    cdef double _cont_leaf(
+        self, ContinuousInputNode P, ContinuousInputNode Q, int sP, int sQ
+    ) except *:
+        cdef double ell
+        cdef _LogExpContLeaf entry
+        ell = P.log_inner_product_c(Q)
+        if self.recording:
+            entry = _LogExpContLeaf()
+            entry.side_P = sP
+            entry.side_Q = sQ
+            entry.P = P
+            entry.Q = Q
+            self.append_tape(entry, P, Q)
+        return ell
 
     cdef double _leaf(self, FiniteDiscreteInputNode P, FiniteDiscreteInputNode Q, int sP, int sQ) except *:
         _check_leaf_compat(P, Q)
@@ -1117,10 +1203,12 @@ cdef tuple _run_pair(CoupleContext ctx, CircuitNode r1, CircuitNode r2, double v
     g1.value = value
     g1.sum_grads = ctx.sum_grads0
     g1.cat_grads = ctx.cat_grads0
+    g1.cont_grads = ctx.cont_grads0
     g2 = GradBundle()
     g2.value = value
     g2.sum_grads = ctx.sum_grads1
     g2.cat_grads = ctx.cat_grads1
+    g2.cont_grads = ctx.cont_grads1
     return (value, g1, g2)
 
 
@@ -1146,6 +1234,12 @@ cpdef double exp_query(object circuit1, object circuit2) except *:
     if isinstance(circuit1, CompiledCircuit):
         c1 = circuit1
         c2 = circuit2
+        if c1.circuit_domain == DOMAIN_CONTINUOUS:
+            r1 = _compiled_root(c1)
+            r2 = _compiled_root(c2)
+            ctx = ExpectationContext()
+            ctx.reset_base()
+            return ctx.couple_value(r1, r2, 0, 1)
         return _FlatExpectationContext().solve_value(c1, c2)
     r1 = _unwrap(circuit1)
     r2 = _unwrap(circuit2)
@@ -1175,6 +1269,17 @@ cpdef tuple exp_query_and_grad(object circuit1, object circuit2):
     if isinstance(circuit1, CompiledCircuit):
         c1 = circuit1
         c2 = circuit2
+        if c1.circuit_domain == DOMAIN_CONTINUOUS:
+            r1 = _compiled_root(c1)
+            r2 = _compiled_root(c2)
+            ctx = ExpectationContext()
+            ctx.reset_base()
+            ctx.recording = True
+            try:
+                value = ctx.couple_value(r1, r2, 0, 1)
+                return _run_pair(ctx, r1, r2, value)
+            finally:
+                ctx.recording = False
         return _FlatExpectationContext().solve_with_grad(c1, c2)
     r1 = _unwrap(circuit1)
     r2 = _unwrap(circuit2)
@@ -1207,6 +1312,12 @@ cpdef double log_exp_query(object circuit1, object circuit2) except *:
     if isinstance(circuit1, CompiledCircuit):
         c1 = circuit1
         c2 = circuit2
+        if c1.circuit_domain == DOMAIN_CONTINUOUS:
+            r1 = _compiled_root(c1)
+            r2 = _compiled_root(c2)
+            ctx = LogExpectationContext()
+            ctx.reset_base()
+            return ctx.couple_value(r1, r2, 0, 1)
         return _FlatLogExpectationContext().solve_value(c1, c2)
     r1 = _unwrap(circuit1)
     r2 = _unwrap(circuit2)
@@ -1236,6 +1347,17 @@ cpdef tuple log_exp_query_and_grad(object circuit1, object circuit2):
     if isinstance(circuit1, CompiledCircuit):
         c1 = circuit1
         c2 = circuit2
+        if c1.circuit_domain == DOMAIN_CONTINUOUS:
+            r1 = _compiled_root(c1)
+            r2 = _compiled_root(c2)
+            ctx = LogExpectationContext()
+            ctx.reset_base()
+            ctx.recording = True
+            try:
+                value = ctx.couple_value(r1, r2, 0, 1)
+                return _run_pair(ctx, r1, r2, value)
+            finally:
+                ctx.recording = False
         return _FlatLogExpectationContext().solve_with_grad(c1, c2)
     r1 = _unwrap(circuit1)
     r2 = _unwrap(circuit2)

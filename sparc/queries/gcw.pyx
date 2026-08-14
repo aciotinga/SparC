@@ -25,6 +25,7 @@ from sparc.metrics cimport GroundMetric, PNormMetric
 from sparc.nodes cimport (
     CategoricalInputNode,
     CircuitNode,
+    DOMAIN_CONTINUOUS,
     FiniteDiscreteInputNode,
     NODE_INPUT,
     NODE_PRODUCT,
@@ -81,6 +82,17 @@ cdef void _check_pair_types(object c1, object c2) except *:
             "pairwise queries require both operands to be the same kind: "
             "either both CircuitNode or both CompiledCircuit"
         )
+    _reject_continuous(c1)
+    _reject_continuous(c2)
+
+
+cdef void _reject_continuous(object circuit) except *:
+    if isinstance(circuit, CompiledCircuit):
+        if (<CompiledCircuit>circuit).circuit_domain == DOMAIN_CONTINUOUS:
+            raise ValueError("GCW does not support continuous circuits")
+    elif isinstance(circuit, CircuitNode):
+        if (<CircuitNode>circuit).circuit_domain == DOMAIN_CONTINUOUS:
+            raise ValueError("GCW does not support continuous circuits")
 
 
 cdef void _leaf_pmf(FiniteDiscreteInputNode leaf, vector[double]& out) except *:
@@ -1884,6 +1896,8 @@ cpdef object gcw_coupling_circuit(
     """
     cdef CircuitNode r1 = _unwrap(circuit1)
     cdef CircuitNode r2 = _unwrap(circuit2)
+    _reject_continuous(r1)
+    _reject_continuous(r2)
     cdef GCWContext ctx = GCWContext()
     ctx.metric0 = metric1 if metric1 is not None else PNormMetric(metric_p, scale_factor_1)
     ctx.metric1 = metric2 if metric2 is not None else PNormMetric(metric_p, scale_factor_2)

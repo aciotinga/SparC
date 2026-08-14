@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -93,26 +94,16 @@ def test_circuit_save_load_wrapper():
     _assert_tree_equal(circuit, restored)
 
 
-def test_gaussian_rejected_on_load():
-    payload = {
-        "format": "gcw-circuit-v1",
-        "backend": "numpy",
-        "root": 0,
-        "nodes": [
-            {
-                "id": 0,
-                "kind": "gaussian",
-                "children": [],
-                "scope": [0],
-                "mean": 0.0,
-                "std": 1.0,
-            }
-        ],
-    }
-    import json
+def test_gaussian_roundtrip():
+    from sparc.nodes import GaussianInputNode
 
-    with pytest.raises(ValueError, match="Gaussian"):
-        CircuitSerializer.loads(json.dumps(payload))
+    circuit = GaussianInputNode(0, 0.5, 1.25)
+    payload = json.loads(CircuitSerializer.dumps(circuit))
+    assert payload["nodes"][0]["kind"] == "gaussian"
+    restored = CircuitSerializer.loads(json.dumps(payload))
+    assert isinstance(restored, GaussianInputNode)
+    assert restored.mu_value() == pytest.approx(0.5)
+    assert restored.sigma_value() == pytest.approx(1.25)
 
 
 def test_load_categorical_near_unity_sum():
