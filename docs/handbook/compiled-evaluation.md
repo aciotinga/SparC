@@ -72,9 +72,11 @@ compiler can auto-vectorize across the sample axis. The public API is unchanged
 (`log_likelihood` / `likelihood` on `CompiledCircuit`); only the internal
 `nogil` kernel differs from the per-row scalar loop.
 
-On Linux/Windows (and macOS wheels built with `libomp`), that row axis may run
-under OpenMP: the batch is split once per eval, each thread walking the full
-DAG on its row slice. Cap the team at the top of a script:
+On Linux/Windows that row axis may run under OpenMP: the batch is split once
+per eval, each thread walking the full DAG on its row slice. macOS wheels are
+serial (Homebrew `libomp` is too new to vendor); a source build with
+`SPARC_OPENMP=1` and a compatible `libomp` enables it. Cap the team at the
+top of a script:
 
 ```python
 import sparc
